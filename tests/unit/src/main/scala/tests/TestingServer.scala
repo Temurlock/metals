@@ -1126,7 +1126,7 @@ final case class TestingServer(
   ): String = {
     val items =
       completion.getItems.asScala
-        .sortBy(_.getLabel())
+        // .sortBy(_.getLabel()) WTF why?
         .map(item => fullServer.completionItemResolve(item).get())
     items.iterator
       .filter(item => filter(item.getLabel()))

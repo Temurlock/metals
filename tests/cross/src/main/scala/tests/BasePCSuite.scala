@@ -17,6 +17,7 @@ import scala.meta.internal.semver.SemVer
 import scala.meta.io.AbsolutePath
 import scala.meta.pc.PresentationCompiler
 import scala.meta.pc.PresentationCompilerConfig
+import scala.meta.pc.ReferenceCountProvider
 
 import coursierapi.Dependency
 import coursierapi.Fetch
@@ -42,6 +43,8 @@ abstract class BasePCSuite extends BaseSuite with PCSuite {
 
   val isNightly: Boolean =
     scalaVersion.contains("-bin-") || scalaVersion.contains("NIGHTLY")
+
+  val referenceCountProvider: ReferenceCountProvider = (symbol: String) => 0
 
   val tmp: AbsolutePath = AbsolutePath(Files.createTempDirectory("metals"))
   val dialect: Dialect =
@@ -70,6 +73,7 @@ abstract class BasePCSuite extends BaseSuite with PCSuite {
       .withConfiguration(config)
       .withExecutorService(executorService)
       .withScheduledExecutorService(executorService)
+      .withReferenceCounter(referenceCountProvider)
       .newInstance("", myclasspath.asJava, scalacOpts.asJava)
   }
 
