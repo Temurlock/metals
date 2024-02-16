@@ -24,6 +24,7 @@ import scala.meta.pc.SymbolSearch
 import scala.meta.pc.SyntheticDecoration
 import scala.meta.pc.SyntheticDecorationsParams
 import scala.meta.pc.VirtualFileParams
+import scala.meta.pc.ReferenceCountProvider
 
 import dotty.tools.pc.{ScalaPresentationCompiler as DottyPresentationCompiler}
 import org.eclipse.lsp4j.CompletionItem
@@ -55,6 +56,7 @@ case class ScalaPresentationCompiler(
     config: PresentationCompilerConfig = PresentationCompilerConfigImpl(),
     folderPath: Option[Path] = None,
     reportsLevel: ReportLevel = ReportLevel.Info,
+    referenceCounter: ReferenceCountProvider = (_: String) => 0
 ) extends PresentationCompiler:
   val underlying: DottyPresentationCompiler = new DottyPresentationCompiler(
     buildTargetIdentifier = buildTargetIdentifier,
@@ -104,6 +106,10 @@ case class ScalaPresentationCompiler(
       scheduledExecutorService: ScheduledExecutorService
   ): PresentationCompiler =
     copy(sh = Some(scheduledExecutorService))
+
+  override def withReferenceCounter(
+      provider: ReferenceCountProvider
+  ): PresentationCompiler = copy(referenceCounter = provider)
 
   override def hover(
       params: OffsetParams

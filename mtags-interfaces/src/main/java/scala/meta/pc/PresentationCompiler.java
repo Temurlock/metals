@@ -252,6 +252,8 @@ public abstract class PresentationCompiler {
 	 */
 	public abstract PresentationCompiler withWorkspace(Path workspace);
 
+	public abstract PresentationCompiler withReferenceCounter(ReferenceCountProvider provider);
+
 	/**
 	 * Construct a new presentation compiler with the given parameters.
 	 *

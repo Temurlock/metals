@@ -1123,11 +1123,18 @@ final case class TestingServer(
       completion: CompletionList,
       includeDetail: Boolean,
       filter: String => Boolean = _ => true,
+      saveCompletionOrder: Boolean
   ): String = {
-    val items =
-      completion.getItems.asScala
-        .sortBy(_.getLabel())
-        .map(item => fullServer.completionItemResolve(item).get())
+    val items = {
+      if (saveCompletionOrder)
+        completion.getItems.asScala
+          .map(item => fullServer.completionItemResolve(item).get())
+      else
+        completion.getItems.asScala
+          .sortBy(_.getLabel())
+          .map(item => fullServer.completionItemResolve(item).get())
+    }
+
     items.iterator
       .filter(item => filter(item.getLabel()))
       .map { item =>

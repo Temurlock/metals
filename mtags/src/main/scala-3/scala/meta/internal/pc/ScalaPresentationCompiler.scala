@@ -41,6 +41,7 @@ case class ScalaPresentationCompiler(
     config: PresentationCompilerConfig = PresentationCompilerConfigImpl(),
     folderPath: Option[Path] = None,
     reportsLevel: ReportLevel = ReportLevel.Info,
+    referenceCounter: ReferenceCountProvider = (_: String) => 0
 ) extends PresentationCompiler:
 
   def this() = this("", None, Nil, Nil)
@@ -59,6 +60,11 @@ case class ScalaPresentationCompiler(
 
   override def withReportsLoggerLevel(level: String): PresentationCompiler =
     copy(reportsLevel = ReportLevel.fromString(level))
+
+  override def withReferenceCounter(
+      provider: ReferenceCountProvider
+  ): PresentationCompiler =
+  copy(referenceCounter = provider)
 
   val compilerAccess: CompilerAccess[StoreReporter, MetalsDriver] =
     Scala3CompilerAccess(
