@@ -34,6 +34,15 @@ final class AtomicTrieMap[K, V] {
     }
     concurrentMap.compute(key, computeFunction)
   }
+
+  override def toString: String = trieMap.toString()
+
+  // Кажется тупо concurrentMap.clear и trieMap.clear
+  def clear(): Unit = {
+    concurrentMap.clear()
+    trieMap.clear()
+  }
+
 }
 
 object AtomicTrieMap {

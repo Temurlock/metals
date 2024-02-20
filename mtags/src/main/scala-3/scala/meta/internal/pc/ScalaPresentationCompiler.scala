@@ -60,6 +60,10 @@ case class ScalaPresentationCompiler(
   override def withReportsLoggerLevel(level: String): PresentationCompiler =
     copy(reportsLevel = ReportLevel.fromString(level))
 
+  override def withReferenceCounter(
+      provider: ReferenceCountProvider
+  ): PresentationCompiler = this
+
   val compilerAccess: CompilerAccess[StoreReporter, MetalsDriver] =
     Scala3CompilerAccess(
       config,

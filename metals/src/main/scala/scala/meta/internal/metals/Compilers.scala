@@ -82,6 +82,7 @@ class Compilers(
     mtagsResolver: MtagsResolver,
     sourceMapper: SourceMapper,
     worksheetProvider: WorksheetProvider,
+    referenceCounter: WorkspaceToplevelReferenceCountProvider,
 )(implicit ec: ExecutionContextExecutorService, rc: ReportContext)
     extends Cancelable {
   val plugins = new CompilerPlugins()
@@ -1142,6 +1143,7 @@ class Compilers(
       .withWorkspace(workspace.toNIO)
       .withScheduledExecutorService(sh)
       .withReportsLoggerLevel(MetalsServerConfig.default.loglevel)
+      .withReferenceCounter(referenceCounter)
       .withConfiguration {
         val options =
           InitializationOptions.from(initializeParams).compilerOptions

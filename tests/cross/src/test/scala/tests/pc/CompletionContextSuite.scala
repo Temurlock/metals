@@ -9,7 +9,8 @@ class CompletionContextSuite extends BaseCompletionSuite {
   override def extraDependencies(scalaVersion: String): Seq[Dependency] =
     Seq(
       Dependency.of(
-        Module.of("org.typelevel", s"cats-effect_2.13"), "3.5.3" // TODO: возмонжо добавить обработку других версий
+        Module.of("org.typelevel", s"cats-effect_2.13"),
+        "3.5.3" // TODO: возмонжо добавить обработку других версий
       )
     )
 
@@ -33,7 +34,7 @@ class CompletionContextSuite extends BaseCompletionSuite {
     }
   )
 
-  /* Хотелось бы java.time видеть выше
+  /* Хотелось бы java.time видеть выше (можно сделать более реалистичный кейс с zio(там будут предлагать java.time выше зиошного), но зачем?)
   Clock - cats.effect.kernel
   Clock - java.time
   ClockOps - cats.effect.kernel.syntax
@@ -41,7 +42,6 @@ class CompletionContextSuite extends BaseCompletionSuite {
   ClockPlatform - cats.effect.kernel
   ResourceClock - cats.effect.kernel
    */
-
 
   checkItems(
     "context".tag(IgnoreScala3),

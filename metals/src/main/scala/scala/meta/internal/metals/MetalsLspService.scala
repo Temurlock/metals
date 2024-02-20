@@ -546,6 +546,9 @@ class MetalsLspService(
     buildTargets,
   )
 
+  private val workspaceToplevelReferenceCountProvider =
+    new WorkspaceToplevelReferenceCountProvider()
+
   private val syntheticHoverProvider: SyntheticHoverProvider =
     new SyntheticHoverProvider(
       folder,
@@ -563,6 +566,7 @@ class MetalsLspService(
       referencesProvider,
       implementationProvider,
       testProvider,
+      workspaceToplevelReferenceCountProvider,
     ),
     buildTargets,
     folder,
@@ -676,6 +680,7 @@ class MetalsLspService(
       mtagsResolver,
       sourceMapper,
       worksheetProvider,
+      workspaceToplevelReferenceCountProvider,
     )
   )
 
@@ -1625,7 +1630,7 @@ class MetalsLspService(
       callHierarchyProvider.outgoingCalls(params, token).map(_.asJava)
     }
 
-  override def completion(
+  override def completion( // ну можно тут прокинуть
       params: CompletionParams
   ): CompletableFuture[CompletionList] =
     CancelTokens.future { token => compilers.completions(params, token) }
