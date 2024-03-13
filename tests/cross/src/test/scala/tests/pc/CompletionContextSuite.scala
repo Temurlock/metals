@@ -6,6 +6,12 @@ import coursierapi._
 
 class CompletionContextSuite extends BaseCompletionSuite {
 
+  override val referenceCountProvider = {
+    case "java.time.Clock" => 1
+    case "scala.concurrent.Future" => 1
+    case _ => 0
+  }
+
   override def extraDependencies(scalaVersion: String): Seq[Dependency] =
     Seq(
       Dependency.of(
