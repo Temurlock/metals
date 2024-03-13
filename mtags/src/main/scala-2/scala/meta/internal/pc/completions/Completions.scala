@@ -107,7 +107,7 @@ trait Completions { this: MetalsGlobal =>
           tm.inherited
         )
       case w: WorkspaceMember =>
-        -referenceCounter.references(w.sym.fullName) // проверить что суется
+        MemberOrdering.IsWorkspaceSymbol + w.sym.name.length()
       case w: OverrideDefMember =>
         var penalty = computeRelevancePenalty(
           w.sym,
@@ -231,7 +231,7 @@ trait Completions { this: MetalsGlobal =>
         else {
           val byLocalSymbol = compareLocalSymbols(o1, o2)
           if (byLocalSymbol != 0)
-            byLocalSymbol // кажется где нибудь тут можно сортировать по использованию
+            byLocalSymbol
           else {
             val byFrequency = compareFrequency(o1, o2)
             if (byFrequency != 0) byFrequency

@@ -1630,7 +1630,7 @@ class MetalsLspService(
       callHierarchyProvider.outgoingCalls(params, token).map(_.asJava)
     }
 
-  override def completion( // ну можно тут прокинуть
+  override def completion(
       params: CompletionParams
   ): CompletableFuture[CompletionList] =
     CancelTokens.future { token => compilers.completions(params, token) }
