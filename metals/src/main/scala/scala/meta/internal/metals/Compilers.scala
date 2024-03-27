@@ -36,6 +36,7 @@ import scala.meta.pc.OffsetParams
 import scala.meta.pc.PresentationCompiler
 import scala.meta.pc.SymbolSearch
 import scala.meta.pc.SyntheticDecoration
+import scala.meta.pc.ReferenceCountProvider
 
 import ch.epfl.scala.bsp4j.BuildTargetIdentifier
 import ch.epfl.scala.bsp4j.CompileReport
@@ -82,6 +83,7 @@ class Compilers(
     mtagsResolver: MtagsResolver,
     sourceMapper: SourceMapper,
     worksheetProvider: WorksheetProvider,
+    referenceCounter: ReferenceCountProvider,
 )(implicit ec: ExecutionContextExecutorService, rc: ReportContext)
     extends Cancelable {
   val plugins = new CompilerPlugins()
@@ -1142,6 +1144,7 @@ class Compilers(
       .withWorkspace(workspace.toNIO)
       .withScheduledExecutorService(sh)
       .withReportsLoggerLevel(MetalsServerConfig.default.loglevel)
+      .withReferenceCounter(referenceCounter)
       .withConfiguration {
         val options =
           InitializationOptions.from(initializeParams).compilerOptions
