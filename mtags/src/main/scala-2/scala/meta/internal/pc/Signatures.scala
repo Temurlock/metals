@@ -114,9 +114,15 @@ trait Signatures { compiler: MetalsGlobal =>
     }
 
     def getUsedRenamesInfo(): List[String] =
-      lookedUpRenames.flatMap { key =>
-        renames.get(key).map(v => s"type $v = ${key.nameString}")
-      }.toList
+      getUsedRenames.toList.sortBy(_._2).map { case (key, v) =>
+        s"type $v = ${key.nameString}"
+      }
+
+    def getUsedRenames: Map[Symbol, String] = lookedUpRenames.flatMap { key =>
+      renames.get(key).collect {
+        case v if key.nameString != v.toString => key -> v.toString()
+      }
+    }.toMap
 
     def this(context: Context) =
       this(lookupSymbol = { name =>
@@ -185,7 +191,7 @@ trait Signatures { compiler: MetalsGlobal =>
                 sym.isStaticMember || // Java static
                 sym.owner.ownerChain.forall { s =>
                   // ensure the symbol can be referenced in a static manner, without any instance
-                  s.isPackageClass || s.isPackageObjectClass || s.isModule
+                  s.isPackageClass || s.isPackageObjectClass || s.isModule || s.isModuleClass
                 }
               ) {
                 history(name) = short

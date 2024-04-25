@@ -1,6 +1,6 @@
 package scala.meta.internal.pc.printer
 
-import java.{util as ju}
+import java.util as ju
 
 import scala.annotation.tailrec
 
@@ -35,6 +35,9 @@ class ShortenedNames(
     foundRenames.map { (from, to) =>
       s"type $to = ${from.showName}"
     }.toList
+
+  def getUsedRenames(using Context): Map[Symbol, String] =
+    foundRenames.toMap.filter { case (k, v) => k.showName != v }
 
   /**
    * Returns a list of shortened names

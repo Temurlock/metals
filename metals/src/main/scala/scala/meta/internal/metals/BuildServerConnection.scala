@@ -108,6 +108,9 @@ class BuildServerConnection private (
 
   def isAmmonite: Boolean = name == Ammonite.name
 
+  def supportsLazyClasspathResolution: Boolean =
+    capabilities.getJvmCompileClasspathProvider()
+
   def supportsLanguage(id: String): Boolean =
     Option(capabilities.getCompileProvider())
       .exists(_.getLanguageIds().contains(id)) ||
@@ -131,6 +134,10 @@ class BuildServerConnection private (
 
   def isDependencySourcesSupported: Boolean =
     capabilities.getDependencySourcesProvider()
+
+  // Scala CLI breaks when we try to use the `buildTarget/dependencyModules` request
+  def isDependencyModulesSupported: Boolean =
+    capabilities.getDependencyModulesProvider() && !isScalaCLI
 
   /* Currently only Bloop and sbt support running single test cases
    * and ScalaCLI uses Bloop underneath.
@@ -325,6 +332,30 @@ class BuildServerConnection private (
     completableFuture.asScala
   }
 
+  def buildTargetJvmClasspath(
+      params: JvmCompileClasspathParams,
+      cancelPromise: Promise[Unit],
+  ): Future[JvmCompileClasspathResult] = {
+    val resultOnScalaOptionsUnsupported = new JvmCompileClasspathResult(
+      List.empty[JvmCompileClasspathItem].asJava
+    )
+    if (supportsLazyClasspathResolution) {
+      val onFail =
+        Some(
+          (
+            resultOnScalaOptionsUnsupported,
+            "Jvm compile classpath request not supported by server",
+          )
+        )
+      val completable = register(
+        server => server.buildTargetJvmCompileClasspath(params),
+        onFail,
+      )
+      cancelPromise.future.map(_ => completable.cancel(true))
+      completable.asScala
+    } else Future.successful(resultOnScalaOptionsUnsupported)
+  }
+
   def buildTargetScalacOptions(
       params: ScalacOptionsParams
   ): Future[ScalacOptionsResult] = {
@@ -386,6 +417,17 @@ class BuildServerConnection private (
     else
       Future.successful(
         new WrappedSourcesResult(List.empty[WrappedSourcesItem].asJava)
+      )
+  }
+
+  def buildTargetDependencyModules(
+      params: DependencyModulesParams
+  ): Future[DependencyModulesResult] = {
+    if (isDependencyModulesSupported)
+      register(server => server.buildTargetDependencyModules(params)).asScala
+    else
+      Future.successful(
+        new DependencyModulesResult(List.empty[DependencyModulesItem].asJava)
       )
   }
 
@@ -653,15 +695,17 @@ object BuildServerConnection {
       BuildInfo.supportedScala2Versions.asJava,
     )
 
+    val capabilities = new BuildClientCapabilities(
+      List("scala", "java").asJava
+    )
+    capabilities.setJvmCompileClasspathReceiver(true)
     val initializeResult = server.buildInitialize {
       val params = new InitializeBuildParams(
         "Metals",
         BuildInfo.metalsVersion,
         BuildInfo.bspVersion,
         workspace.toURI.toString,
-        new BuildClientCapabilities(
-          List("scala", "java").asJava
-        ),
+        capabilities,
       )
       val gson = new Gson
       val data = gson.toJsonTree(extraParams)

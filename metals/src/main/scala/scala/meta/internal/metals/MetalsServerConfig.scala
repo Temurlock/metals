@@ -15,7 +15,6 @@ import scala.meta.pc.PresentationCompilerConfig.OverrideDefFormat
  * @param globSyntax pattern used for `DidChangeWatchedFilesRegistrationOptions`.
  * @param statusBar how to handle metals/status notifications with {"statusType": "metals"}.
  * @param bspStatusBar how to handle metals/status notifications with {"statusType": "bsp"}.
- * @param slowTask how to handle metals/slowTask requests.
  * @param executeClientCommand whether client provides the ability to support the
  *                             `metals/executeClientCommand` command.
  * @param snippetAutoIndent if the client defaults to adding the identation of
@@ -50,7 +49,6 @@ final case class MetalsServerConfig(
     globSyntax: GlobSyntaxConfig = GlobSyntaxConfig.default,
     statusBar: StatusBarConfig = StatusBarConfig.default,
     bspStatusBar: StatusBarConfig = StatusBarConfig.bspDefault,
-    slowTask: SlowTaskConfig = SlowTaskConfig.default,
     executeClientCommand: ExecuteClientCommandConfig =
       ExecuteClientCommandConfig.default,
     snippetAutoIndent: Boolean = MetalsServerConfig.binaryOption(
@@ -112,6 +110,11 @@ final case class MetalsServerConfig(
       Option(System.getProperty("metals.build-server-ping-interval"))
         .flatMap(opt => Try(Duration(opt)).toOption)
         .getOrElse(Duration("1m")),
+    worksheetTimeout: Int =
+      Option(System.getProperty("metals.worksheet-timeout"))
+        .filter(_.forall(Character.isDigit(_)))
+        .map(_.toInt)
+        .getOrElse(30),
 ) {
   override def toString: String =
     List[String](
@@ -119,7 +122,6 @@ final case class MetalsServerConfig(
       s"status-bar=$statusBar",
       s"open-files-on-rename=$openFilesOnRenames",
       s"rename-file-threshold=$renameFileThreshold",
-      s"slow-task=$slowTask",
       s"execute-client-command=$executeClientCommand",
       s"compilers=$compilers",
       s"http=$isHttpEnabled",
@@ -134,6 +136,7 @@ final case class MetalsServerConfig(
       s"max-log-backup=${maxLogBackups}",
       s"server-to-idle-time=${metalsToIdleTime}",
       s"build-server-ping-interval=${pingInterval}",
+      s"worksheet-timeout=$worksheetTimeout",
     ).mkString("MetalsServerConfig(\n  ", ",\n  ", "\n)")
 }
 object MetalsServerConfig {

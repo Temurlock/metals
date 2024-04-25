@@ -42,6 +42,7 @@ import scala.meta.internal.metals.SourceMapper
 import scala.meta.internal.metals.StacktraceAnalyzer
 import scala.meta.internal.metals.StatusBar
 import scala.meta.internal.metals.UserConfiguration
+import scala.meta.internal.metals.WorkDoneProgress
 import scala.meta.internal.metals.clients.language.LogForwarder
 import scala.meta.internal.metals.clients.language.MetalsLanguageClient
 import scala.meta.internal.metals.clients.language.MetalsQuickPickItem
@@ -85,6 +86,7 @@ class DebugProvider(
     semanticdbs: Semanticdbs,
     compilers: Compilers,
     statusBar: StatusBar,
+    workDoneProgress: WorkDoneProgress,
     sourceMapper: SourceMapper,
     userConfig: () => UserConfiguration,
     testProvider: TestSuitesProvider,
@@ -142,7 +144,7 @@ class DebugProvider(
         )
       debugServer <-
         if (isJvm)
-          statusBar.trackSlowFuture(
+          workDoneProgress.trackFuture(
             "Starting debug server",
             start(
               sessionName,
@@ -150,7 +152,7 @@ class DebugProvider(
               buildServer,
               cancelPromise,
             ),
-            () => cancelPromise.trySuccess(()),
+            Some(() => cancelPromise.trySuccess(())),
           )
         else
           runLocally(
@@ -256,12 +258,8 @@ class DebugProvider(
             socket
           }
 
-        val connWithTimeout =
-          // if slow task is supported users can stop it themselves
-          if (clientConfig.slowTaskIsOn()) conn
-          else conn.withTimeout(60, TimeUnit.SECONDS)
-
-        connWithTimeout
+        conn
+          .withTimeout(60, TimeUnit.SECONDS)
           .recover { case exception =>
             connectedToServer.tryFailure(exception)
             cancelPromise.trySuccess(())
@@ -296,8 +294,10 @@ class DebugProvider(
         compilers,
         workspace,
         clientConfig.disableColorOutput(),
-        statusBar,
+        workDoneProgress,
         sourceMapper,
+        compilations,
+        targets,
       )
     }
     val server = new DebugServer(sessionName, uri, proxyFactory)
@@ -517,13 +517,13 @@ class DebugProvider(
   def runCommandDiscovery(
       unresolvedParams: DebugDiscoveryParams
   )(implicit ec: ExecutionContext): Future[b.DebugSessionParams] = {
-    debugDiscovery(unresolvedParams).map(enrichWithMainShellCommand)
+    debugDiscovery(unresolvedParams).flatMap(enrichWithMainShellCommand)
   }
 
   private def enrichWithMainShellCommand(
       params: b.DebugSessionParams
-  ): b.DebugSessionParams = {
-    params.getData() match {
+  )(implicit ec: ExecutionContext): Future[b.DebugSessionParams] = {
+    val future = params.getData() match {
       case json: JsonElement
           if params.getDataKind == b.DebugSessionParamsDataKind.SCALA_MAIN_CLASS =>
         json.as[b.ScalaMainClass] match {
@@ -534,21 +534,31 @@ class DebugProvider(
                 JavaBinary.javaBinaryFromPath(scalaTarget.jvmHome)
               )
               .orElse(userConfig().usedJavaBinary)
-            val updatedData = buildTargetClasses.jvmRunEnvironment
-              .get(params.getTargets().get(0))
-              .zip(javaBinary) match {
-              case None =>
-                main.toJson
-              case Some((env, javaHome)) =>
-                ExtendedScalaMainClass(main, env, javaHome, workspace).toJson
-            }
-            params.setData(updatedData)
-          case _ =>
+            buildTargetClasses
+              .jvmRunEnvironment(params.getTargets().get(0))
+              .map { envItem =>
+                val updatedData = envItem.zip(javaBinary) match {
+                  case None =>
+                    main.toJson
+                  case Some((env, javaHome)) =>
+                    ExtendedScalaMainClass(
+                      main,
+                      env,
+                      javaHome,
+                      workspace,
+                    ).toJson
+                }
+                params.setData(updatedData)
+              }
+          case _ => Future.unit
         }
 
-      case _ =>
+      case _ => Future.unit
     }
-    params
+
+    future.map { _ =>
+      params
+    }
   }
 
   /**

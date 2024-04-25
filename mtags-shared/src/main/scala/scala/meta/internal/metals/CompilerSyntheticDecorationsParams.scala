@@ -4,9 +4,10 @@ import java.net.URI
 
 import scala.meta.pc.CancelToken
 import scala.meta.pc.SyntheticDecorationsParams
+import scala.meta.pc.VirtualFileParams
 
 case class CompilerSyntheticDecorationsParams(
-    virtualFileParams: CompilerVirtualFileParams,
+    virtualFileParams: VirtualFileParams,
     inferredTypes: Boolean,
     typeParameters: Boolean,
     implicitParameters: Boolean,

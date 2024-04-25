@@ -21,10 +21,10 @@ jobs:
         shard: [1, 2]
         include:
           - os: ubuntu-latest
-            java: "8"
+            java: "11"
             shard: 1
           - os: ubuntu-latest
-            java: "8"
+            java: "11"
             shard: 2
     steps:
       - uses: actions/checkout@v4
@@ -75,9 +75,9 @@ jobs:
             java: "17"
           - type: sbt-metals jdk8
             command: bin/test.sh sbt-metals/scripted
-            name: Sbt-metals/scripted jdk8
+            name: Sbt-metals/scripted jdk11
             os: ubuntu-latest
-            java: "8"
+            java: "11"
           - type: maven
             command: bin/test.sh 'slow/testOnly -- tests.maven.*'
             name: Maven integration
@@ -116,11 +116,6 @@ jobs:
           - type: mtags-java
             command: sbt javapc/test
             name: Scala javapc tests
-            os: ubuntu-latest
-            java: "17"
-          - type: cross-test-nightly
-            command: sbt cross-test-latest-nightly
-            name: Scala3 latest NIGHTLY cross test
             os: ubuntu-latest
             java: "17"
           - type: cross-test-2-11

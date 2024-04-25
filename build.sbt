@@ -9,7 +9,7 @@ Global / onChangedBuildSource := ReloadOnSourceChanges
 Global / resolvers += "scala-integration" at
   "https://scala-ci.typesafe.com/artifactory/scala-integration/"
 
-def localSnapshotVersion = "1.2.3-SNAPSHOT"
+def localSnapshotVersion = "1.3.1-SNAPSHOT"
 def isCI = System.getenv("CI") != null
 
 def isScala211(v: Option[(Long, Long)]): Boolean = v.contains((2, 11))
@@ -17,28 +17,18 @@ def isScala212(v: Option[(Long, Long)]): Boolean = v.contains((2, 12))
 def isScala213(v: Option[(Long, Long)]): Boolean = v.contains((2, 13))
 def isScala2(v: Option[(Long, Long)]): Boolean = v.exists(_._1 == 2)
 def isScala3(v: Option[(Long, Long)]): Boolean = v.exists(_._1 == 3)
-def isScala3WithPresentationCompiler(v: String): Boolean =
-  (Version.parse(v), Version.parse(V.firstScala3PCVersion)) match {
-    case (Some(v), _) if V.supportedScalaVersions.contains(v.toString()) =>
-      false
-    case (Some(v), Some(firstScala3PCVersion)) => v >= firstScala3PCVersion
-    case _ => false
-  }
 
 def crossSetting[A](
     scalaVersion: String,
     if211: List[A] = Nil,
     if213: List[A] = Nil,
     if3: List[A] = Nil,
-    if3WithPresentationCompiler: List[A] = Nil,
     if2: List[A] = Nil,
 ): List[A] =
   CrossVersion.partialVersion(scalaVersion) match {
     case partialVersion if isScala211(partialVersion) => if211 ::: if2
     case partialVersion if isScala212(partialVersion) => if2
     case partialVersion if isScala213(partialVersion) => if2 ::: if213
-    case _ if isScala3WithPresentationCompiler(scalaVersion) =>
-      if3WithPresentationCompiler
     case partialVersion if isScala3(partialVersion) => if3
     case _ => Nil
   }
@@ -142,18 +132,6 @@ commands ++= Seq(
       "mtags-java/publishLocal" ::
       publishMtags
   },
-  Command.command("cross-test-latest-nightly") { s =>
-    val max =
-      if (V.nightlyScala3DottyVersions.nonEmpty)
-        Option(V.nightlyScala3DottyVersions.max)
-      else None
-    max match {
-      case Some(latest) => crossTestDyn(s, latest.toString)
-      case None =>
-        println("No nightly versions was found. Skipping cross/test")
-        s
-    }
-  },
   Command.command("cross-test-2-11") { s =>
     crossTestDyn(s, V.scala211)
   },
@@ -203,14 +181,26 @@ val sharedScalacOptions = List(
   scalacOptions ++= {
     CrossVersion.partialVersion(scalaVersion.value) match {
       case partialVersion
+          // Scala 2.12.16 and lower break within the tests if target is set to 11
           if isScala211(partialVersion) ||
-            // Scala 2.12 has a bug on older version that break with `-release`
-            isScala212(partialVersion) && V.scala212 != scalaVersion.value =>
-        List("-target:jvm-1.8", "-Yrangepos", "-Xexperimental")
+            scalaVersion.value == "2.12.16" ||
+            isScala212(partialVersion) && V.deprecatedScala2Versions
+              .contains(scalaVersion.value) =>
+        List(
+          "-target:jvm-1.8",
+          "-Yrangepos",
+          "-Xexperimental",
+        ) // TODO after release drop 2.11.12
+      /* Scala 2.12 has a bug on older version that break with `-release, but target
+       * is enough and we will confirm the compilation on latest Scala 2.12
+       */
+      case partialVersion
+          if isScala212(partialVersion) && V.scala212 != scalaVersion.value =>
+        List("-target:11", "-Yrangepos", "-Xexperimental")
       case partialVersion if isScala3(partialVersion) =>
-        List("-Xtarget:8", "-language:implicitConversions", "-Xsemanticdb")
+        List("-Xtarget:11", "-language:implicitConversions", "-Xsemanticdb")
       case _ =>
-        List("-target:jvm-1.8", "-Yrangepos")
+        List("-target:11", "-Yrangepos")
     }
   }
 )
@@ -238,7 +228,7 @@ lazy val interfaces = project
     moduleName := "mtags-interfaces",
     autoScalaLibrary := false,
     mimaPreviousArtifacts := Set(
-      "org.scalameta" % "mtags-interfaces" % "1.2.1"
+      "org.scalameta" % "mtags-interfaces" % "1.2.2"
     ),
     crossPaths := false,
     libraryDependencies ++= List(
@@ -258,9 +248,7 @@ lazy val mtagsShared = project
     moduleName := "mtags-shared",
     crossTarget := target.value / s"scala-${scalaVersion.value}",
     // Dotty depends on Scala 2.13 for compatibility guarantees for from-source compilation.
-    crossScalaVersions :=
-      (V.supportedScalaVersions ++ V.nightlyScala3Versions)
-        .filterNot(isScala3WithPresentationCompiler),
+    crossScalaVersions := V.supportedScalaVersions,
     crossVersion := CrossVersion.full,
     Compile / packageSrc / publishArtifact := true,
     Compile / scalacOptions ++= {
@@ -270,7 +258,7 @@ lazy val mtagsShared = project
     },
     libraryDependencies ++= List(
       "org.lz4" % "lz4-java" % "1.8.0",
-      "com.google.protobuf" % "protobuf-java" % "3.25.3",
+      "com.google.protobuf" % "protobuf-java" % "4.26.1",
       "io.get-coursier" % "interface" % V.coursierInterfaces,
     ),
   )
@@ -310,7 +298,7 @@ def scala3ScalametaDependency =
     ) // avoid 2.13 and 3 on the classpath since it comes in via pprint
 
 val mtagsSettings = List(
-  crossScalaVersions := V.supportedScalaVersions ++ V.nightlyScala3Versions,
+  crossScalaVersions := V.supportedScalaVersions,
   crossTarget := target.value / s"scala-${scalaVersion.value}",
   crossVersion := CrossVersion.full,
   Compile / unmanagedSourceDirectories ++= multiScalaDirectories(
@@ -342,9 +330,6 @@ val mtagsSettings = List(
         "org.scala-lang" %% "scala3-compiler" % scalaVersion.value,
         scala3ScalametaDependency,
       ),
-      if3WithPresentationCompiler = List(
-        "org.scala-lang" %% "scala3-presentation-compiler" % scalaVersion.value
-      ),
     ),
   },
   libraryDependencies ++= {
@@ -367,8 +352,6 @@ val mtagsSettings = List(
       Set("2.13.5", "2.13.6", "2.13.7", "2.13.8")
     if (scalaVersionsWithSpecialCompat(scalaVersion.value))
       current.filter(f => f.getName() != "scala-2.13")
-    else if (isScala3WithPresentationCompiler(scalaVersion.value))
-      List(base / s"scala-3-wrapper")
     else
       current
   },
@@ -394,35 +377,12 @@ lazy val mtags3 = project
   .dependsOn(interfaces)
   .enablePlugins(BuildInfoPlugin)
 
-lazy val mtags3WithPresentationCompiler = project
-  .in(file(".mtags"))
-  .settings(
-    Compile / unmanagedSourceDirectories := Seq(),
-    sharedSettings,
-    mtagsSettings,
-    Compile / unmanagedSourceDirectories += (ThisBuild / baseDirectory).value / "mtags" / "src" / "main" / "scala-3-wrapper",
-    moduleName := "mtags3WithPresentationCompiler",
-    scalaVersion := V.wrapperMetalsVersion,
-    target := (ThisBuild / baseDirectory).value / "mtags" / "target" / "target3-wrapper",
-    publish / skip := true,
-    scalafixConfig := Some(
-      (ThisBuild / baseDirectory).value / ".scalafix3.conf"
-    ),
-  )
-  .dependsOn(interfaces)
-  .enablePlugins(BuildInfoPlugin)
-
 lazy val mtags = project
   .settings(
     sharedSettings,
     mtagsSettings,
     moduleName := "mtags",
-    projectDependencies := {
-      // mtags-shared are included in scala3-presentation-compiler module as sources
-      if (isScala3WithPresentationCompiler(scalaVersion.value)) {
-        projectDependencies.value.filterNot(_.name == "mtags-shared")
-      } else projectDependencies.value
-    },
+    projectDependencies := projectDependencies.value,
   )
   .dependsOn(mtagsShared)
   .enablePlugins(BuildInfoPlugin)
@@ -450,7 +410,7 @@ lazy val metals = project
       "com.swoval" % "file-tree-views" % "2.1.12",
       // for http client
       "io.undertow" % "undertow-core" % "2.2.20.Final",
-      "org.jboss.xnio" % "xnio-nio" % "3.8.12.Final",
+      "org.jboss.xnio" % "xnio-nio" % "3.8.13.Final",
       // for persistent data like "dismissed notification"
       "org.flywaydb" % "flyway-core" % "9.22.3",
       "com.h2database" % "h2" % "2.2.224",
@@ -498,11 +458,11 @@ lazy val metals = project
       // for logging
       "com.outr" %% "scribe" % V.scribe,
       "com.outr" %% "scribe-file" % V.scribe,
-      "com.outr" %% "scribe-slf4j" % V.scribe, // needed for flyway database migrations
+      "com.outr" %% "scribe-slf4j2" % V.scribe, // needed for flyway database migrations
       // for JSON formatted doctor
-      "com.lihaoyi" %% "ujson" % "3.1.4",
+      "com.lihaoyi" %% "ujson" % "3.3.0",
       // For fetching projects' templates
-      "com.lihaoyi" %% "requests" % "0.8.0",
+      "com.lihaoyi" %% "requests" % "0.8.2",
       // for producing SemanticDB from Scala source files, to be sure we want the same version of scalameta
       "org.scalameta" %% "scalameta" % V.semanticdb(scalaVersion.value),
       "org.scalameta" % "semanticdb-scalac-core" % V.semanticdb(
@@ -510,7 +470,7 @@ lazy val metals = project
       ) cross CrossVersion.full,
       // For starting Ammonite
       "io.github.alexarchambault.ammonite" %% "ammonite-runner" % "0.4.0",
-      "org.scala-lang.modules" %% "scala-xml" % "2.2.0",
+      "org.scala-lang.modules" %% "scala-xml" % "2.3.0",
       "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.4",
       ("org.virtuslab.scala-cli" % "scala-cli-bsp" % V.scalaCli)
         .exclude("ch.epfl.scala", "bsp4j"),
@@ -526,9 +486,9 @@ lazy val metals = project
       "bloopConfigVersion" -> V.bloopConfig,
       "bloopNightlyVersion" -> V.bloop,
       "sbtBloopVersion" -> V.sbtBloop,
+      "gitter8Version" -> V.gitter8Version,
       "gradleBloopVersion" -> V.gradleBloop,
       "mavenBloopVersion" -> V.mavenBloop,
-      "gradleBloopVersion" -> V.gradleBloop,
       "scalametaVersion" -> V.scalameta,
       "semanticdbVersion" -> V.semanticdb(scalaVersion.value),
       "javaSemanticdbVersion" -> V.javaSemanticdb,
@@ -550,6 +510,7 @@ lazy val metals = project
       "ammonite212" -> V.ammonite212Version,
       "ammonite213" -> V.ammonite213Version,
       "ammonite3" -> V.ammonite3Version,
+      "bazelScalaVersion" -> V.bazelScalaVersion,
       "scala213" -> V.scala213,
       "scala3" -> V.scala3,
       "lastSupportedSemanticdb" -> SemanticDbSupport.last,
@@ -698,9 +659,8 @@ lazy val mtest = project
       "scala212" -> V.scala212,
       "scala213" -> V.scala213,
       "scala3" -> V.scala3,
-      "firstScala3PCVersion" -> V.firstScala3PCVersion,
       "scala2Versions" -> V.scala2Versions,
-      "scala3Versions" -> (V.scala3Versions ++ V.nightlyScala3Versions),
+      "scala3Versions" -> V.scala3Versions,
       "scala2Versions" -> V.scala2Versions,
       "scalaVersion" -> scalaVersion.value,
       "kindProjector" -> V.kindProjector,
@@ -712,19 +672,6 @@ lazy val mtest = project
       (ThisBuild / baseDirectory).value / "tests" / "mtest",
       scalaVersion.value,
     ),
-    libraryDependencies ++= {
-      if (isScala3WithPresentationCompiler(scalaVersion.value))
-        List(scala3ScalametaDependency)
-      else Nil
-    },
-    Compile / unmanagedSourceDirectories ++= {
-      val base = (mtags / Compile / sourceDirectory).value
-      if (isScala3WithPresentationCompiler(scalaVersion.value)) {
-        List(base / "scala")
-      } else {
-        Nil
-      }
-    },
   )
   .dependsOn(mtags)
   .enablePlugins(BuildInfoPlugin)
@@ -773,7 +720,8 @@ lazy val metalsDependencies = project
       // The dependencies listed below are only listed so Scala Steward
       // will pick them up and update them. They aren't actually used.
       "com.lihaoyi" %% "ammonite-util" % V.ammonite,
-      "org.typelevel" % "kind-projector" % V.kindProjector cross CrossVersion.full,
+      // not available for Scala 2.13.13
+      // "org.typelevel" % "kind-projector" % V.kindProjector cross CrossVersion.full,
       "com.olegpy" %% "better-monadic-for" % V.betterMonadicFor,
       "com.lihaoyi" % "mill-contrib-testng" % V.mill,
       "org.virtuslab.scala-cli" % "cli_3" % V.scalaCli intransitive (),
@@ -781,6 +729,7 @@ lazy val metalsDependencies = project
       "ch.epfl.scala" %% "gradle-bloop" % V.gradleBloop,
       "com.sourcegraph" % "semanticdb-java" % V.javaSemanticdb,
       "ch.epfl.scala" %% "scala-debug-adapter" % V.debugAdapter intransitive (),
+      "org.foundweekends.giter8" %% "giter8" % V.gitter8Version intransitive (),
     ),
   )
   .disablePlugins(ScalafixPlugin)

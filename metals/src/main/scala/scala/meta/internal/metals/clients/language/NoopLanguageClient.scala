@@ -21,10 +21,6 @@ import org.eclipse.lsp4j.WorkDoneProgressCreateParams
  */
 abstract class NoopLanguageClient extends MetalsLanguageClient {
   override def metalsStatus(params: MetalsStatusParams): Unit = ()
-  override def metalsSlowTask(
-      params: MetalsSlowTaskParams
-  ): CompletableFuture[MetalsSlowTaskResult] =
-    new CompletableFuture[MetalsSlowTaskResult]()
   override def telemetryEvent(`object`: Any): Unit = ()
   override def publishDiagnostics(diagnostics: PublishDiagnosticsParams): Unit =
     ()
@@ -71,6 +67,9 @@ abstract class NoopLanguageClient extends MetalsLanguageClient {
 
   override def notifyProgress(params: ProgressParams): Unit = ()
 
+  override def refreshInlayHints(): CompletableFuture[Void] = {
+    CompletableFuture.completedFuture(null)
+  }
 }
 
 object NoopLanguageClient extends NoopLanguageClient

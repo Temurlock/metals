@@ -380,11 +380,8 @@ class CompletionSuite extends BaseCompletionSuite {
       |  }
       |  Xtension@@
       |}""".stripMargin,
-    """|XtensionMethod(a: Int): A.XtensionMethod
-       |""".stripMargin,
-    compat = Map(
-      "3" -> "XtensionMethod(a: Int): XtensionMethod"
-    )
+    """|XtensionMethod(a: Int): XtensionMethod
+       |""".stripMargin
   )
 
   check(
@@ -399,7 +396,7 @@ class CompletionSuite extends BaseCompletionSuite {
   )
 
   check(
-    "fuzzy1".tag(IgnoreScalaVersion(_ => isJava8)),
+    "fuzzy1",
     """
       |object A {
       |  new PBuil@@
@@ -567,7 +564,7 @@ class CompletionSuite extends BaseCompletionSuite {
   )
 
   check(
-    "import3".tag(IgnoreScalaVersion(_ => isJava8)),
+    "import3",
     """
       |import Path@@
       |""".stripMargin,
@@ -1793,7 +1790,7 @@ class CompletionSuite extends BaseCompletionSuite {
         | val t: TT@@
         |}
         |""".stripMargin,
-    "TTT[A] = O.TTT",
+    "TTT[A] = TTT",
     compat = Map(
       "3" -> "TTT[A <: Int] = List[A]"
     )
@@ -2282,6 +2279,50 @@ class CompletionSuite extends BaseCompletionSuite {
     """|import scala.collection.{AbstractMap => Set@@}
        |""".stripMargin,
     ""
+  )
+
+  // This checks if inferStart doesn't crash
+  check(
+    "infer-correct-start".tag(IgnoreScala3),
+    """|object O {
+       |  val alpha = (((hex >> 24) / 0xff & 1@@).toInt
+       |  val red = ((hex >> 16) & 0xff).toInt
+       |}
+       |""".stripMargin,
+    ""
+  )
+
+  // currently because of the way indexing works
+  // the potentially correct completion symbol `a/A.Xtension#foofoo().` won't be created
+  // this test just checks that `a/A#Xtension#foofoo().` is not shown
+  check(
+    "implicit-class-owner-must-be-static",
+    """|package a
+       |object A extends A {}
+       |class A {
+       |  implicit class Xtension(i: Int){
+       |    def foofoo() = ???
+       |  }
+       |}
+       |
+       |object O {
+       |  val f = 1.foofoo@@
+       |}
+       |""".stripMargin,
+    ""
+  )
+
+  check(
+    "private-def-should-not-be-suggested",
+    s"""|object O {
+        |  private def apply(i: Int) = i
+        |}
+        |
+        |object W {
+        |  val g = O@@
+        |}""".stripMargin,
+    "",
+    filter = _ == "O(i: Int): Int"
   )
 
 }

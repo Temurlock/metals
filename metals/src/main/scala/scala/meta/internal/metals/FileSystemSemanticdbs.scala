@@ -3,6 +3,7 @@ package scala.meta.internal.metals
 import java.nio.charset.Charset
 
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.scalacli.ScalaCliServers
 import scala.meta.internal.mtags.Md5Fingerprints
 import scala.meta.internal.mtags.SemanticdbClasspath
 import scala.meta.internal.mtags.Semanticdbs
@@ -19,12 +20,16 @@ final class FileSystemSemanticdbs(
     charset: Charset,
     mainWorkspace: AbsolutePath,
     fingerprints: Md5Fingerprints,
+    scalaCliServers: => ScalaCliServers,
 ) extends Semanticdbs {
 
   override def textDocument(file: AbsolutePath): TextDocumentLookup = {
     if (
       (!file.toLanguage.isScala && !file.toLanguage.isJava) ||
-      file.toNIO.getFileSystem != mainWorkspace.toNIO.getFileSystem
+      file.toNIO.getFileSystem != mainWorkspace.toNIO.getFileSystem ||
+      scalaCliServers.loadedExactly(
+        file
+      ) // scala-cli single files, interactive is used for those
     ) {
       TextDocumentLookup.NotFound(file)
     } else {
@@ -75,7 +80,7 @@ final class FileSystemSemanticdbs(
     if (semanticdbpath.isFile) Some(FoundSemanticDbPath(semanticdbpath, None))
     else {
       // needed in case sources are symlinked,
-      for {
+      val result = for {
         sourceRoot <- buildTargets.originalInverseSourceItem(file)
         relativeSourceRoot = sourceRoot.toRelative(workspace)
         relativeFile = file.toRelative(sourceRoot.dealias)
@@ -91,7 +96,13 @@ final class FileSystemSemanticdbs(
         alternativeSemanticdbPath,
         Some(fullRelativePath),
       )
+      if (result.isEmpty)
+        scribe.debug(
+          s"No text document found at for $file expected at ${semanticdbpath}"
+        )
+      result
     }
+
   }
 
 }

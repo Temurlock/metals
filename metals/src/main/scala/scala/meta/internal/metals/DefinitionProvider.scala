@@ -8,6 +8,7 @@ import scala.concurrent.Future
 import scala.meta.Term
 import scala.meta.Type
 import scala.meta.inputs.Input
+import scala.meta.inputs.Position.Range
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.mtags.GlobalSymbolIndex
 import scala.meta.internal.mtags.Mtags
@@ -33,6 +34,7 @@ import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.Position
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.SymbolKind
+import org.eclipse.lsp4j.TextDocumentIdentifier
 import org.eclipse.lsp4j.TextDocumentPositionParams
 
 /**
@@ -95,13 +97,21 @@ final class DefinitionProvider(
         DefinitionResult.empty
     }
     val fromCompilerOrSemanticdb =
-      if (fromSnapshot.isEmpty && path.isScalaFilename) {
-        compilers().definition(params, token)
-      } else {
-        if (fromSemanticdb.isEmpty) {
-          warnings.noSemanticdb(path)
-        }
-        Future.successful(fromSnapshot)
+      fromSnapshot match {
+        case defn if defn.isEmpty && path.isScalaFilename =>
+          compilers().definition(params, token)
+        case defn @ DefinitionResult(_, symbol, _, _, querySymbol)
+            if symbol != querySymbol && path.isScalaFilename =>
+          compilers().definition(params, token).map { compilerDefn =>
+            if (compilerDefn.isEmpty || compilerDefn.querySymbol == querySymbol)
+              defn
+            else compilerDefn.copy(semanticdb = defn.semanticdb)
+          }
+        case defn =>
+          if (fromSemanticdb.isEmpty) {
+            warnings.noSemanticdb(path)
+          }
+          Future.successful(defn)
       }
 
     fromCompilerOrSemanticdb.map { definition =>
@@ -118,6 +128,23 @@ final class DefinitionProvider(
         definition
       }
     }
+  }
+
+  def definition(
+      path: AbsolutePath,
+      pos: Int,
+  ): Future[DefinitionResult] = {
+    val text = path.readText
+    val input = new Input.VirtualFile(path.toURI.toString(), text)
+    val range = Range(input, pos, pos)
+    definition(
+      path,
+      new TextDocumentPositionParams(
+        new TextDocumentIdentifier(path.toURI.toString()),
+        range.toLsp.getStart(),
+      ),
+      EmptyCancelToken,
+    )
   }
 
   /**
@@ -166,9 +193,8 @@ final class DefinitionProvider(
         else true
       }
 
-      val dialect = scalaVersionSelector.dialectFromBuildTarget(path)
       val locs = workspaceSearch
-        .searchExactFrom(ident.value, path, token, dialect)
+        .searchExactFrom(ident.value, path, token, Some(path))
 
       val reducedGuesses =
         if (locs.size > 1)
@@ -184,6 +210,7 @@ final class DefinitionProvider(
             ident.value,
             None,
             None,
+            ident.value,
           )
         )
       } else None
@@ -351,6 +378,7 @@ final class DefinitionProvider(
           occ.symbol,
           None,
           dirtyPosition.getTextDocument.getUri,
+          occ.symbol,
         ).toResult
       } else {
         // symbol is global so it is defined in an external destination buffer.
@@ -386,6 +414,7 @@ case class DefinitionDestination(
     symbol: String,
     path: Option[AbsolutePath],
     uri: String,
+    querySymbol: String,
 ) {
 
   /**
@@ -405,6 +434,7 @@ case class DefinitionDestination(
         symbol,
         path,
         Some(snapshot),
+        querySymbol,
       )
     }
 
@@ -514,9 +544,10 @@ class DestinationProvider(
           Some(
             DefinitionResult(
               ju.Collections.singletonList(range.toLocation(uri)),
-              symbol,
+              defn.definitionSymbol.value,
               Some(defn.path),
               None,
+              defn.querySymbol.value,
             )
           )
         case _ =>
@@ -533,6 +564,7 @@ class DestinationProvider(
             defn.definitionSymbol.value,
             Some(destinationPath),
             uri,
+            defn.querySymbol.value,
           ).toResult
       }
     }

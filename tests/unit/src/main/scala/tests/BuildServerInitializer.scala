@@ -6,6 +6,8 @@ import scala.util.Properties
 
 import scala.meta.internal.builds.BuildTool
 import scala.meta.internal.builds.SbtBuildTool
+import scala.meta.internal.metals.Directories
+import scala.meta.internal.metals.Messages.GenerateBspAndConnect
 import scala.meta.internal.metals.Messages.ImportBuild
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.metals.ServerCommands
@@ -23,7 +25,7 @@ sealed trait BuildServerInitializer {
       server: TestingServer,
       client: TestingClient,
       expectError: Boolean,
-      workspaceFolders: List[String] = Nil,
+      workspaceFolders: Option[List[String]] = None,
   )(implicit ec: ExecutionContext): Future[InitializeResult]
 }
 
@@ -38,11 +40,13 @@ object QuickBuildInitializer extends BuildServerInitializer {
       server: TestingServer,
       client: TestingClient,
       expectError: Boolean,
-      workspaceFolders: List[String] = Nil,
+      workspaceFolders: Option[List[String]] = None,
   )(implicit ec: ExecutionContext): Future[InitializeResult] = {
     val foldersToInit =
-      if (workspaceFolders.nonEmpty) workspaceFolders.map(workspace.resolve)
-      else List(workspace)
+      workspaceFolders match {
+        case Some(workspaceFolders) => workspaceFolders.map(workspace.resolve)
+        case None => List(workspace)
+      }
     foldersToInit.foreach(QuickBuild.bloopInstall)
     for {
       initializeResult <- server.initialize(workspaceFolders)
@@ -67,7 +71,7 @@ object BloopImportInitializer extends BuildServerInitializer {
       server: TestingServer,
       client: TestingClient,
       expectError: Boolean,
-      workspaceFolders: List[String] = Nil,
+      workspaceFolders: Option[List[String]] = None,
   )(implicit ec: ExecutionContext): Future[InitializeResult] = {
     for {
       initializeResult <- server.initialize()
@@ -95,11 +99,12 @@ object SbtServerInitializer extends BuildServerInitializer {
       server: TestingServer,
       client: TestingClient,
       expectError: Boolean,
-      workspaceFolders: List[String] = Nil,
+      workspaceFolders: Option[List[String]] = None,
   )(implicit ec: ExecutionContext): Future[InitializeResult] = {
-    val paths =
-      if (workspaceFolders.isEmpty) List(workspace)
-      else workspaceFolders.map(workspace.resolve)
+    val paths = workspaceFolders match {
+      case Some(workspaceFolders) => workspaceFolders.map(workspace.resolve)
+      case None => List(workspace)
+    }
     paths.foreach { path =>
       val sbtVersion =
         SbtBuildTool
@@ -133,11 +138,11 @@ object SbtServerInitializer extends BuildServerInitializer {
     }
   }
 
-  private def generateBspConfig(
+  def generateBspConfig(
       workspace: AbsolutePath,
       sbtVersion: String,
   ): Unit = {
-    val bspFolder = workspace.resolve(".bsp")
+    val bspFolder = workspace.resolve(Directories.bsp)
     val sbtJson = bspFolder.resolve("sbt.json")
     // don't overwrite existing BSP config
     if (!sbtJson.isFile) {
@@ -174,7 +179,7 @@ object MillServerInitializer extends BuildServerInitializer {
       server: TestingServer,
       client: TestingClient,
       expectError: Boolean,
-      workspaceFolders: List[String] = Nil,
+      workspaceFolders: Option[List[String]] = None,
   )(implicit ec: ExecutionContext): Future[InitializeResult] = {
     for {
       initializeResult <- server.initialize()
@@ -198,12 +203,12 @@ object BazelServerInitializer extends BuildServerInitializer {
       server: TestingServer,
       client: TestingClient,
       expectError: Boolean,
-      workspaceFolders: List[String] = Nil,
+      workspaceFolders: Option[List[String]] = None,
   )(implicit ec: ExecutionContext): Future[InitializeResult] = {
     for {
       initializeResult <- server.initialize()
       // Import build using Bazel
-      _ = client.importBuild = ImportBuild.yes
+      _ = client.generateBspAndConnect = GenerateBspAndConnect.yes
       _ <- server.initialized()
     } yield {
       if (!expectError) {

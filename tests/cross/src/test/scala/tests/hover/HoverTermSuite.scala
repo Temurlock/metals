@@ -622,7 +622,7 @@ class HoverTermSuite extends BaseHoverSuite {
   )
 
   check(
-    "import-rename".tag(IgnoreForScala3CompilerPC),
+    "import-rename",
     """|import scala.collection.{AbstractMap => AB}
        |import scala.collection.{Set => S}
        |
@@ -652,7 +652,7 @@ class HoverTermSuite extends BaseHoverSuite {
   )
 
   check(
-    "import-rename2".tag(IgnoreForScala3CompilerPC),
+    "import-rename2",
     """|import scala.collection.{AbstractMap => AB}
        |import scala.collection.{Set => S}
        |
@@ -680,4 +680,42 @@ class HoverTermSuite extends BaseHoverSuite {
     )
   )
 
+  check(
+    "import-no-rename",
+    """
+      |import scala.collection
+      |
+      |object O {
+      |  <<val ab@@c = collection.Map(1 -> 2)>>
+      |}
+      |""".stripMargin,
+    """|```scala
+       |val abc: collection.Map[Int,Int]
+       |```
+       |""".stripMargin,
+    compat = Map(
+      "3" -> """|```scala
+                |val abc: scala.collection.Map[Int, Int]
+                |```
+                |""".stripMargin
+    )
+  )
+
+  check(
+    "notAssignedType".tag(IgnoreScala2),
+    """
+      |import scala.language.experimental.genericNumberLiterals
+      |import scala.util.FromDigits
+      |
+      |final case class Nanometer(val value: Double)
+      |object Nanometer:
+      |  given FromDigits[Nanometer] with
+      |    def fromDigits(s: String) = Nanometer(s.toDouble)
+      |extension(i: Int)
+      |  def nm = Nanometer(i.toDouble)
+      |  @targetNam@@e("nm_")
+      |  infix def nm() = Nanometer(i.toDouble)
+      |""".stripMargin,
+    "".stripMargin
+  )
 }

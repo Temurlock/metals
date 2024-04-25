@@ -7,10 +7,14 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 import scala.collection.concurrent.TrieMap
+import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
+import scala.concurrent.Promise
+import scala.concurrent.duration.Duration
 
 import scala.meta._
 import scala.meta.inputs.Input.VirtualFile
@@ -24,14 +28,14 @@ import scala.meta.internal.metals.Diagnostics
 import scala.meta.internal.metals.Embedded
 import scala.meta.internal.metals.Messages
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.MetalsServerConfig
 import scala.meta.internal.metals.MutableCancelable
 import scala.meta.internal.metals.ScalaVersionSelector
-import scala.meta.internal.metals.StatusBar
 import scala.meta.internal.metals.Time
 import scala.meta.internal.metals.Timer
 import scala.meta.internal.metals.UserConfiguration
+import scala.meta.internal.metals.WorkDoneProgress
 import scala.meta.internal.metals.clients.language.MetalsLanguageClient
-import scala.meta.internal.metals.clients.language.MetalsSlowTaskParams
 import scala.meta.internal.mtags.MD5
 import scala.meta.internal.pc.CompilerJobQueue
 import scala.meta.internal.pc.InterruptException
@@ -48,6 +52,7 @@ import coursierapi.error.SimpleResolutionError
 import mdoc.interfaces.EvaluatedWorksheet
 import mdoc.interfaces.Mdoc
 import org.eclipse.lsp4j.Hover
+import org.eclipse.lsp4j.MessageType
 import org.eclipse.lsp4j.Position
 
 /**
@@ -61,12 +66,13 @@ class WorksheetProvider(
     buildTargets: BuildTargets,
     languageClient: MetalsLanguageClient,
     userConfig: () => UserConfiguration,
-    statusBar: StatusBar,
+    workDoneProgress: WorkDoneProgress,
     diagnostics: Diagnostics,
     embedded: Embedded,
     publisher: WorksheetPublisher,
     compilations: Compilations,
     scalaVersionSelector: ScalaVersionSelector,
+    serverConfig: MetalsServerConfig,
 )(implicit ec: ExecutionContext)
     extends Cancelable {
 
@@ -246,10 +252,9 @@ class WorksheetProvider(
         )
       }
       cancelables.add(Cancelable(() => completeEmptyResult()))
-      statusBar.trackFuture(
+      workDoneProgress.trackFuture(
         s"Evaluating ${path.filename}",
         result.asScala,
-        showTimer = true,
       )
       token.checkCanceled()
       // NOTE(olafurpg) Run evaluation in a custom thread so that we can
@@ -264,9 +269,18 @@ class WorksheetProvider(
           )
         }
       }
-      interruptThreadOnCancel(path, result, thread)
+      val cancellable = toCancellable(thread, result)
+      interruptThreadOnCancel(path, result, cancellable)
       thread.start()
-      thread.join()
+      val timeout = serverConfig.worksheetTimeout * 1000
+      thread.join(timeout)
+      if (!result.isDone()) {
+        cancellable.cancel()
+        languageClient.showMessage(
+          MessageType.Warning,
+          Messages.worksheetTimeout,
+        )
+      }
     }
     jobs.submit(
       result,
@@ -282,6 +296,32 @@ class WorksheetProvider(
     result.asScala.recover(onError)
   }
 
+  private def toCancellable(
+      thread: Thread,
+      result: CompletableFuture[Option[EvaluatedWorksheet]],
+  ): Cancelable = {
+    // Last resort, if everything else fails we use `Thread.stop()`.
+    val stopThread = new Runnable {
+      def run(): Unit = {
+        if (thread.isAlive()) {
+          scribe.warn(s"thread stop: ${thread.getName()}")
+          thread.stop()
+        }
+      }
+    }
+    new Cancelable {
+      def cancel() =
+        if (thread.isAlive()) {
+          // Canceling a running program. first line of
+          // defense is `Thread.interrupt()`. Fingers crossed it's enough.
+          result.complete(None)
+          threadStopper.schedule(stopThread, 3, TimeUnit.SECONDS)
+          scribe.warn(s"thread interrupt: ${thread.getName()}")
+          thread.interrupt()
+        }
+    }
+  }
+
   /**
    * Prompts the user to cancel the task after a few seconds.
    *
@@ -292,41 +332,20 @@ class WorksheetProvider(
   private def interruptThreadOnCancel(
       path: AbsolutePath,
       result: CompletableFuture[Option[EvaluatedWorksheet]],
-      thread: Thread,
+      cancellable: Cancelable,
   ): Unit = {
-    // Last resort, if everything else fails we use `Thread.stop()`.
-    val stopThread = new Runnable {
-      def run(): Unit = {
-        if (thread.isAlive()) {
-          scribe.warn(s"thread stop: ${thread.getName()}")
-          thread.stop()
-        }
-      }
-    }
     // If the program is running for more than
     // `userConfig().worksheetCancelTimeout`, then display a prompt for the user
     // to cancel the program.
     val interruptThread = new Runnable {
       def run(): Unit = {
         if (!result.isDone()) {
-          val cancel = languageClient.metalsSlowTask(
-            new MetalsSlowTaskParams(
-              s"Evaluating worksheet '${path.filename}'",
-              quietLogs = true,
-              secondsElapsed = userConfig().worksheetCancelTimeout,
-            )
+          val token = workDoneProgress.startProgress(
+            s"Evaluating worksheet '${path.filename}'",
+            onCancel = Some(cancellable.cancel),
           )
-          cancel.asScala.foreach { c =>
-            if (c.cancel && thread.isAlive()) {
-              // User has requested to cancel a running program. first line of
-              // defense is `Thread.interrupt()`. Fingers crossed it's enough.
-              result.complete(None)
-              threadStopper.schedule(stopThread, 3, TimeUnit.SECONDS)
-              scribe.warn(s"thread interrupt: ${thread.getName()}")
-              thread.interrupt()
-            }
-          }
-          result.asScala.onComplete(_ => cancel.cancel(true))
+
+          result.asScala.onComplete(_ => workDoneProgress.endProgress(token))
         }
       }
     }
@@ -428,12 +447,31 @@ class WorksheetProvider(
           .filterNot(_.contains("Ycheck-reentrant"))
           .filterNot(_.contains("org.wartremover.warts.NonUnitStatements"))
           .asJava
-        val mdoc = embedded
-          .mdoc(info.scalaVersion)
-          .withClasspath(info.fullClasspath.distinct.asJava)
-          .withScalacOptions(scalacOptions)
-        mdocs(key) = MdocRef(scalaVersion, mdoc)
-        mdoc
+        try {
+          val awaitClasspath = Await.result(
+            buildTargets
+              .targetClasspath(target, Promise[Unit]())
+              .getOrElse(Future.successful(Nil)),
+            Duration(
+              5,
+              TimeUnit.SECONDS,
+            ),
+          )
+          val classpath =
+            awaitClasspath.map(pathString => pathString.toAbsolutePath.toNIO)
+          val mdoc = embedded
+            .mdoc(info.scalaVersion)
+            .withClasspath(classpath.distinct.asJava)
+            .withScalacOptions(scalacOptions)
+          mdocs(key) = MdocRef(scalaVersion, mdoc)
+          mdoc
+        } catch {
+          case _: TimeoutException =>
+            scribe.warn(
+              s"Still waiting for information about classpath, using default worksheet with empty classpath"
+            )
+            fallabackMdoc
+        }
       }
     }
   }

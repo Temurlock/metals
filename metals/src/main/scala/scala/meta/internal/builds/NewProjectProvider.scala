@@ -7,12 +7,13 @@ import scala.concurrent.Future
 import scala.util.Try
 import scala.util.matching.Regex
 
+import scala.meta.internal.metals.BuildInfo
 import scala.meta.internal.metals.ClientCommands
 import scala.meta.internal.metals.ClientConfiguration
 import scala.meta.internal.metals.Icons
 import scala.meta.internal.metals.Messages._
 import scala.meta.internal.metals.MetalsEnrichments._
-import scala.meta.internal.metals.StatusBar
+import scala.meta.internal.metals.WorkDoneProgress
 import scala.meta.internal.metals.clients.language.MetalsInputBoxParams
 import scala.meta.internal.metals.clients.language.MetalsLanguageClient
 import scala.meta.internal.metals.clients.language.MetalsOpenWindowParams
@@ -25,17 +26,17 @@ import coursierapi._
 
 class NewProjectProvider(
     client: MetalsLanguageClient,
-    statusBar: StatusBar,
+    workDoneProgress: WorkDoneProgress,
     config: ClientConfiguration,
     shell: ShellRunner,
     icons: Icons,
-    workspace: AbsolutePath,
+    workspace: () => AbsolutePath,
 )(implicit context: ExecutionContext) {
 
   private val templatesUrl =
     "https://github.com/foundweekends/giter8/wiki/giter8-templates.md"
   private val giterDependency = Dependency
-    .of("org.foundweekends.giter8", "giter8_2.12", "0.13.0-M1")
+    .of("org.foundweekends.giter8", "giter8_2.12", BuildInfo.gitter8Version)
   // equal to cmd's: g8 playframework/play-scala-seed.g8 --name=../<<name>>
   private val giterMain = "giter8.Giter8"
 
@@ -45,7 +46,7 @@ class NewProjectProvider(
       if (allTemplates.nonEmpty) {
         allTemplates
       } else {
-        statusBar.trackBlockingTask(
+        workDoneProgress.trackBlocking(
           "Fetching template information from Github"
         ) {
           // Matches:
@@ -68,7 +69,7 @@ class NewProjectProvider(
     }
 
   def createNewProjectFromTemplate(javaHome: Option[String]): Future[Unit] = {
-    val base = workspace.parent
+    val base = workspace().parent
     val withTemplate = askForTemplate(
       NewProjectProvider.curatedTemplates(icons)
     )

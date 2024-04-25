@@ -44,6 +44,7 @@ import scala.meta.internal.metals.HoverExtParams
 import scala.meta.internal.metals.InitializationOptions
 import scala.meta.internal.metals.ListParametrizedCommand
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.MetalsLspService
 import scala.meta.internal.metals.MetalsServerConfig
 import scala.meta.internal.metals.MetalsServerInputs
 import scala.meta.internal.metals.MtagsResolver
@@ -167,7 +168,9 @@ final case class TestingServer(
   languageServer.connectToLanguageClient(client)
 
   lazy val fullServer = languageServer.getOldMetalsLanguageServer
-  def server = fullServer.folderServices.head
+  def server: MetalsLspService =
+    if (fullServer.folderServices.isEmpty) fullServer.fallbackService
+    else fullServer.folderServices.head
 
   implicit val reports: ReportContext =
     new StdReportContext(workspace.toNIO, _ => None)
@@ -542,11 +545,13 @@ final case class TestingServer(
   }
 
   def initialize(
-      workspaceFolders: List[String] = Nil
+      workspaceFolders: Option[List[String]] = None
   ): Future[l.InitializeResult] = {
     val params = new InitializeParams
     val workspaceCapabilities = new WorkspaceClientCapabilities()
     val textDocumentCapabilities = new TextDocumentClientCapabilities
+    val windowCapabilities = new l.WindowClientCapabilities()
+    windowCapabilities.setWorkDoneProgress(true)
     textDocumentCapabilities.setFoldingRange(new FoldingRangeCapabilities)
     val completionItemCapabilities = new l.CompletionItemCapabilities(true)
     textDocumentCapabilities.setCompletion(
@@ -579,15 +584,22 @@ final case class TestingServer(
       new ClientCapabilities(
         workspaceCapabilities,
         textDocumentCapabilities,
+        windowCapabilities,
         Map.empty.asJava.toJson,
       )
     )
-    params.setWorkspaceFolders(
-      workspaceFolders
-        .map(file => new WorkspaceFolder(toPath(file).toURI.toString))
-        .asJava
-    )
-    params.setRootUri(workspace.toURI.toString)
+
+    workspaceFolders match {
+      case Some(workspaceFolders) =>
+        params.setWorkspaceFolders(
+          workspaceFolders
+            .map(file => new WorkspaceFolder(toPath(file).toURI.toString))
+            .asJava
+        )
+      case None =>
+        params.setRootUri(workspace.toURI.toString)
+    }
+
     languageServer.initialize(params).asScala
   }
 
@@ -1416,6 +1428,53 @@ final case class TestingServer(
     }
   }
 
+  def assertInlayHints(
+      filename: String,
+      expected: String,
+      root: AbsolutePath = workspace,
+  )(implicit
+      location: munit.Location
+  ): Future[Unit] = {
+    val fileContent = TestInlayHints.removeInlayHints(expected)
+    assertInlayHints(filename, fileContent, expected, root)
+  }
+
+  def assertInlayHints(
+      filename: String,
+      fileContent: String,
+      expected: String,
+      root: AbsolutePath,
+  )(implicit
+      location: munit.Location
+  ): Future[Unit] = {
+    for {
+      hints <- inlayHints(filename, fileContent, root)
+    } yield {
+      Assertions.assertNoDiff(
+        TestInlayHints.applyInlayHints(fileContent, hints),
+        expected,
+      )
+    }
+  }
+
+  def inlayHints(
+      filename: String,
+      fileContent: String,
+      root: AbsolutePath = workspace,
+  ): Future[List[l.InlayHint]] = {
+    val path = root.resolve(filename)
+    val input = m.Input.String(fileContent)
+    path.touch()
+    val pos = m.Position.Range(input, 0, fileContent.length)
+    val uri = path.toTextDocumentIdentifier
+    val range = pos.toLsp
+    val params = new org.eclipse.lsp4j.InlayHintParams(uri, range)
+    for {
+      _ <- didSave(filename)(_ => fileContent)
+      inlayHints <- fullServer.inlayHints(params).asScala
+    } yield inlayHints.asScala.toList
+  }
+
   def assertHighlight(
       filename: String,
       query: String,
@@ -1563,12 +1622,19 @@ final case class TestingServer(
       base: Map[String, String],
   ): Future[Map[String, String]] = {
     Debug.printEnclosing()
+    implementation(filename, query).map(
+      TestRanges.renderLocationsAsString(base, _)
+    )
+  }
+
+  def implementation(
+      filename: String,
+      query: String,
+  ): Future[List[Location]] = {
     for {
       (_, params) <- offsetParams(filename, query, workspace)
       implementations <- fullServer.implementation(params).asScala
-    } yield {
-      TestRanges.renderLocationsAsString(base, implementations.asScala.toList)
-    }
+    } yield implementations.asScala.toList
   }
 
   def getReferenceLocations(
@@ -2035,7 +2101,6 @@ object TestingServer {
       debuggingProvider = Some(true),
       runProvider = Some(true),
       treeViewProvider = Some(true),
-      slowTaskProvider = Some(true),
     )
 
   // Caching is done using a key: dependency jars + excludedPackages setting + bucket size

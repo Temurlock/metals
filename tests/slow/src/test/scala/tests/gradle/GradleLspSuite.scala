@@ -5,6 +5,7 @@ import scala.concurrent.Future
 import scala.meta.internal.builds.GradleBuildTool
 import scala.meta.internal.builds.GradleDigest
 import scala.meta.internal.metals.ClientCommands
+import scala.meta.internal.metals.Messages
 import scala.meta.internal.metals.Messages._
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.metals.ServerCommands
@@ -37,15 +38,13 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
             |dependencies {
             |    implementation 'org.scala-lang:scala-library:${V.scala213}'
             |}
+            |/src/main/scala/A.scala
+            |
             |""".stripMargin
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = client.messageRequests.clear() // restart
       _ = assertStatus(_.isInstalled)
@@ -63,11 +62,7 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
     } yield {
       assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has .bloop directory so user is asked to "re-import project"
-          importBuildChangesMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildChangesMessage,
       )
     }
   }
@@ -141,15 +136,13 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
             |dependencies {
             |    implementation 'org.scala-lang:scala-library:${V.scala213}'
             |}
+            |/src/main/scala/A.scala
+            |
             |""".stripMargin
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = client.messageRequests.clear() // restart
       _ = assertStatus(_.isInstalled)
@@ -193,16 +186,13 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
             |        System.exit(0);
             |    }
             |}
+            |/src/main/scala/A.scala
             |
             |""".stripMargin
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = client.messageRequests.clear()
       _ = assertStatus(_.isInstalled)
@@ -238,15 +228,13 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
             |dependencies {
             |    implementation 'org.scala-lang:scala-reflect:${V.scala213}'
             |}
+            |/src/main/scala/A.scala
+            |
             |""".stripMargin
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = client.messageRequests.clear()
       _ = assertStatus(_.isInstalled)
@@ -267,23 +255,23 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
             |dependencies {
             |    implementation 'org.scala-lang:scala-library:${V.scala213}'
             |}
+            |/src/main/scala/A.scala
+            |
             |""".stripMargin
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ <- server.server.buildServerPromise.future
-      _ = client.messageRequests.clear() // restart
+      _ = client.progressParams.clear() // restart
       _ <- server.executeCommand(ServerCommands.ImportBuild)
       _ = assertNoDiff(
-        client.workspaceMessageRequests,
+        client.beginProgressMessages,
         List(
-          progressMessage
+          progressMessage,
+          Messages.importingBuild,
+          Messages.indexing,
         ).mkString("\n"),
       )
     } yield ()
@@ -336,15 +324,14 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
       _ <- initialize(
         """|/build.gradle
            |, syntax error
+           |/src/main/scala/A.scala
+           |
            |""".stripMargin,
         expectError = true,
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = assertNoDiff(
         client.workspaceShowMessages,
@@ -366,10 +353,7 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
       }
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = assertStatus(_.isInstalled)
     } yield ()
@@ -508,6 +492,51 @@ class GradleLspSuite extends BaseImportSuite("gradle-import") {
            |_empty_/A.B.
            |_empty_/Warning.
            |""".stripMargin,
+      )
+    } yield ()
+  }
+
+  test("properly-removes-old-config") {
+    cleanWorkspace()
+    for {
+      _ <- initialize(
+        s"""|/inner/build.gradle
+            |plugins {
+            |    id 'scala'
+            |}
+            |repositories {
+            |    mavenCentral()
+            |}
+            |dependencies {
+            |    implementation 'org.scala-lang:scala-library:${V.scala213}'
+            |}
+            |/inner/settings.gradle
+            |rootProject.name = 'some-project-name'
+            |/inner/src/main/scala/A.scala
+            |object A {
+            |  val foo: Int = "aaa"
+            |}
+            |""".stripMargin
+      )
+      _ = assert(
+        server.server.buildTargets.all
+          .exists(_.getDisplayName() == "some-project-name"),
+        "Build targets should contain \"some-project-name\"",
+      )
+      _ <- server.didChange("inner/settings.gradle")(_ =>
+        "rootProject.name = 'new-name'\n"
+      )
+      _ = client.importBuildChanges = ImportBuildChanges.yes
+      _ <- server.didSave("inner/settings.gradle")(identity)
+      _ = assert(
+        server.server.buildTargets.all
+          .exists(_.getDisplayName() == "new-name"),
+        "Build targets should contain \"new-name\"",
+      )
+      _ = assert(
+        !server.server.buildTargets.all
+          .exists(_.getDisplayName() == "some-project-name"),
+        "Stale build target \"some-project-name\" should be removed.",
       )
     } yield ()
   }

@@ -20,12 +20,12 @@ abstract class BaseSuite extends munit.FunSuite with Assertions {
   val FlakyWindows = new Tag("FlakyWindows")
 
   val scala3PresentationCompilerVersion: String =
-    s">=3.3.3"
+    s">=3.3.4"
 
   Testing.enable()
 
-  def isJava8: Boolean =
-    !Properties.isJavaAtLeast("9")
+  def isJava11: Boolean =
+    Properties.isJavaAtLeast("11")
 
   def isJava17: Boolean =
     Properties.isJavaAtLeast("17")
@@ -47,7 +47,7 @@ abstract class BaseSuite extends munit.FunSuite with Assertions {
     else userHome.resolve(".cache/coursier")
 
   def isValidScalaVersionForEnv(scalaVersion: String): Boolean =
-    this.isJava8 || SemVer.isCompatibleVersion(
+    SemVer.isCompatibleVersion(
       BaseSuite.minScalaVersionForJDK9OrHigher,
       scalaVersion
     ) || scalaVersion.startsWith("3.")

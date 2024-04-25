@@ -7,9 +7,7 @@ import scala.collection.mutable
 import scala.meta.internal.builds.BuildTool
 import scala.meta.internal.builds.VersionRecommendation
 import scala.meta.internal.jdk.CollectionConverters._
-import scala.meta.internal.metals.BloopJsonUpdateCause.BloopJsonUpdateCause
 import scala.meta.internal.metals.clients.language.MetalsInputBoxParams
-import scala.meta.internal.metals.clients.language.MetalsSlowTaskParams
 import scala.meta.internal.metals.clients.language.MetalsStatusParams
 import scala.meta.internal.semver.SemVer
 import scala.meta.io.AbsolutePath
@@ -137,9 +135,6 @@ object Messages {
     "Failed to reset the workspace. See the log for more details.",
   )
 
-  def bloopInstallProgress(buildToolExecName: String) =
-    new MetalsSlowTaskParams(s"$buildToolExecName bloopInstall")
-
   def dontShowAgain: MessageActionItem =
     new MessageActionItem("Don't show again")
 
@@ -176,6 +171,31 @@ object Messages {
       val params = new ShowMessageRequestParams()
       params.setMessage(
         s"New $buildToolName workspace detected, would you like to import the build?"
+      )
+      params.setType(MessageType.Info)
+      params.setActions(
+        List(
+          yes,
+          notNow,
+          dontShowAgain,
+        ).asJava
+      )
+      params
+    }
+  }
+
+  object GenerateBspAndConnect {
+    def yes = new MessageActionItem("Connect")
+
+    def notNow: MessageActionItem = Messages.notNow
+
+    def params(
+        buildToolName: String,
+        buildServerName: String,
+    ): ShowMessageRequestParams = {
+      val params = new ShowMessageRequestParams()
+      params.setMessage(
+        s"New $buildToolName workspace detected, would you like connect to the $buildServerName build server?"
       )
       params.setType(MessageType.Info)
       params.setActions(
@@ -257,7 +277,7 @@ object Messages {
       s"Multiple problems detected in your build."
 
     def bazelNavigation: String =
-      "Code navigation for Bazel projects is not supported yet."
+      "Global rename and references for Bazel projects is not supported yet."
 
     val misconfiguredTestFrameworks: String =
       "Test Explorer won't work due to mis-configuration." + moreInfo
@@ -363,36 +383,6 @@ object Messages {
     }
   }
 
-  object BloopGlobalJsonFilePremodified {
-    def applyAndRestart: MessageActionItem =
-      new MessageActionItem("Apply and Restart Bloop")
-
-    def useGlobalFile: MessageActionItem =
-      new MessageActionItem("Use the Global File's JVM Properties")
-
-    def openGlobalJsonFile: MessageActionItem =
-      new MessageActionItem("Open the Global File")
-
-    def params(
-        bloopJsonUpdateCause: BloopJsonUpdateCause
-    ): ShowMessageRequestParams = {
-      val params = new ShowMessageRequestParams()
-      params.setMessage(
-        s"""|Setting $bloopJsonUpdateCause will result in updating Bloop's global Json file by Metals, which has been previously modified manually!
-            |Do you want to replace them with the new properties and restart the running Bloop server?""".stripMargin
-      )
-      params.setType(MessageType.Warning)
-      params.setActions(
-        List(
-          applyAndRestart,
-          useGlobalFile,
-          openGlobalJsonFile,
-        ).asJava
-      )
-      params
-    }
-  }
-
   object BloopJvmPropertiesChange {
     def reconnect: MessageActionItem =
       new MessageActionItem("Apply and restart Bloop")
@@ -400,12 +390,10 @@ object Messages {
     def notNow: MessageActionItem =
       new MessageActionItem("Not now")
 
-    def params(
-        bloopJsonUpdateCause: BloopJsonUpdateCause
-    ): ShowMessageRequestParams = {
+    def params(): ShowMessageRequestParams = {
       val params = new ShowMessageRequestParams()
       params.setMessage(
-        s"""|Setting $bloopJsonUpdateCause will result in updating Bloop's global Json file, by Metals.
+        s"""|Setting Bloop JVM Properties will result in updating Bloop's global Json file, by Metals.
             |Bloop will need to be restarted in order for these changes to take effect.""".stripMargin
       )
       params.setType(MessageType.Warning)
@@ -994,6 +982,30 @@ object Messages {
     }
   }
 
+  object ProjectJavaHomeUpdate {
+    val restart: MessageActionItem =
+      new MessageActionItem("Restart/Reconnect to the build server")
+
+    val notNow: MessageActionItem =
+      new MessageActionItem("Not now")
+
+    def params(isRestart: Boolean): ShowMessageRequestParams = {
+      val params = new ShowMessageRequestParams()
+      params.setMessage(
+        s"Java home has been updated, do you want to ${if (isRestart) "restart"
+          else "reconnect"} to the BSP server?"
+      )
+      params.setType(MessageType.Info)
+      params.setActions(
+        List(
+          restart,
+          notNow,
+        ).asJava
+      )
+      params
+    }
+  }
+
   object RequestTimeout {
 
     val cancel = new MessageActionItem("Cancel")
@@ -1016,6 +1028,14 @@ object Messages {
       params
     }
   }
+
+  def worksheetTimeout: String =
+    """|Failed to evaluate worksheet, timeout reached, if needed modify add `metals.worksheet-timeout` property.
+       |See: https://scalameta.org/metals/docs/troubleshooting/faq#i-see-spurious-errors-or-worksheet-fails-to-evaluate
+       |""".stripMargin
+
+  val indexing = "Indexing"
+  val importingBuild = "Importing build"
 
 }
 

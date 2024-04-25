@@ -5,12 +5,14 @@ import scala.concurrent.Promise
 import scala.meta.internal.builds.BazelBuildTool
 import scala.meta.internal.builds.BazelDigest
 import scala.meta.internal.metals.FileDecoderProvider
+import scala.meta.internal.metals.Messages
 import scala.meta.internal.metals.Messages._
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.metals.ServerCommands
 import scala.meta.internal.metals.{BuildInfo => V}
 import scala.meta.io.AbsolutePath
 
+import org.eclipse.lsp4j.MessageActionItem
 import tests.BaseImportSuite
 import tests.BazelBuildLayout
 import tests.BazelServerInitializer
@@ -27,18 +29,19 @@ class BazelLspSuite
       workspace: AbsolutePath
   ): Option[String] = BazelDigest.current(workspace)
 
+  val importMessage: String =
+    GenerateBspAndConnect.params("bazel", "bazelbsp").getMessage()
+
   test("basic") {
     cleanWorkspace()
     for {
       _ <- initialize(
-        BazelBuildLayout(workspaceLayout, V.scala213, bazelVersion)
+        BazelBuildLayout(workspaceLayout, V.bazelScalaVersion, bazelVersion)
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
         List(
-          importBuildMessage,
-          // create .bazelbsp progress message
-          BazelBuildTool.mainClass,
+          importMessage,
           bazelNavigationMessage,
         ).mkString("\n"),
       )
@@ -69,7 +72,7 @@ class BazelLspSuite
         text.replace("\"hello\"", "\"hello1\"")
       }
       _ = assertNoDiff(client.workspaceMessageRequests, "")
-      _ = client.importBuildChanges = ImportBuildChanges.yes
+      _ = client.generateBspAndConnect = GenerateBspAndConnect.yes
       _ <- server.didSave(s"BUILD")(identity)
     } yield {
       assertNoDiff(
@@ -85,12 +88,12 @@ class BazelLspSuite
   test("generate-bsp-config") {
     cleanWorkspace()
     writeLayout(
-      BazelBuildLayout(workspaceLayout, V.scala213, bazelVersion)
+      BazelBuildLayout(workspaceLayout, V.bazelScalaVersion, bazelVersion)
     )
     for {
       _ <- server.initialize()
       _ <- server.initialized()
-      _ = assertNoDiff(client.workspaceMessageRequests, importBuildMessage)
+      _ = assertNoDiff(client.workspaceMessageRequests, importMessage)
       _ = client.messageRequests.clear()
       // We dismissed the import request, so bsp should not be configured
       _ = assert(!bazelBspConfig.exists)
@@ -121,25 +124,32 @@ class BazelLspSuite
     } yield {
       assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          "bazelbsp bspConfig",
-          bazelNavigationMessage,
-        ).mkString("\n"),
+        bazelNavigationMessage,
       )
       assert(bazelBspConfig.exists)
       server.assertBuildServerConnection()
     }
   }
 
-  test("import-build") {
+  test("import-reset-build") {
     cleanWorkspace()
     writeLayout(
-      BazelBuildLayout(workspaceLayout, V.scala213, bazelVersion)
+      BazelBuildLayout(workspaceLayout, V.bazelScalaVersion, bazelVersion)
     )
+
+    def getTargetInfo(target: String) = {
+      server
+        .executeDecodeFileCommand(
+          FileDecoderProvider
+            .createBuildTargetURI(workspace, target)
+            .toString
+        )
+        .map(_.value.linesIterator.take(14).mkString("\n"))
+    }
     for {
       _ <- server.initialize()
       _ <- server.initialized()
-      _ = assertNoDiff(client.workspaceMessageRequests, importBuildMessage)
+      _ = assertNoDiff(client.workspaceMessageRequests, importMessage)
       _ = client.messageRequests.clear()
       // We dismissed the import request, so bsp should not be configured
       _ = assert(!bazelBspConfig.exists)
@@ -153,13 +163,8 @@ class BazelLspSuite
       // We need to wait a bit just to ensure the connection is made
       _ <- server.server.buildServerPromise.future
       targets <- server.listBuildTargets
-      result <- server.executeDecodeFileCommand(
-        FileDecoderProvider
-          .createBuildTargetURI(workspace, targets.head.bazelEscapedDisplayName)
-          .toString
-      )
-      _ = assertNoDiff(
-        result.value.linesIterator.take(14).mkString("\n"),
+      result <- getTargetInfo(targets.head.bazelEscapedDisplayName)
+      expectedTarget =
         """|Target
            |  @//:hello1
            |
@@ -170,17 +175,24 @@ class BazelLspSuite
            |  scala
            |
            |Capabilities
-           |  Debug <- NOT SUPPORTED
+           |  Debug
            |  Run
            |  Test <- NOT SUPPORTED
-           |  Compile""".stripMargin,
-      )
+           |  Compile""".stripMargin
+      _ = assertNoDiff(result, expectedTarget)
+      _ = server.server.buildServerPromise = Promise()
+      _ = client.resetWorkspace =
+        new MessageActionItem(Messages.ResetWorkspace.resetWorkspace)
+      _ <- server.executeCommand(ServerCommands.ResetWorkspace)
+      _ <- server.server.buildServerPromise.future
+      resultAfter <- getTargetInfo(targets.head.bazelEscapedDisplayName)
+      _ = assertNoDiff(resultAfter, expectedTarget)
     } yield {
       assertNoDiff(
         client.workspaceMessageRequests,
         List(
-          BazelBuildTool.mainClass,
           bazelNavigationMessage,
+          Messages.ResetWorkspace.message,
         ).mkString("\n"),
       )
       assert(bazelBspConfig.exists)
@@ -193,7 +205,7 @@ class BazelLspSuite
     cleanWorkspace()
     for {
       _ <- initialize(
-        BazelBuildLayout(workspaceLayout, V.scala213, bazelVersion)
+        BazelBuildLayout(workspaceLayout, V.bazelScalaVersion, bazelVersion)
       )
       _ <- server.didOpen("Hello.scala")
       references <- server.references("Hello.scala", "hello")

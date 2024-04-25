@@ -870,7 +870,13 @@ class CompletionArgSuite extends BaseCompletionSuite {
     """|aaa = : Int
        |assert(assertion: Boolean): Unit
        |""".stripMargin,
-    topLines = Some(2)
+    topLines = Some(2),
+    compat = Map(
+      "3" ->
+        """|aaa = : Int
+           |assert(inline assertion: Boolean): Unit
+           |""".stripMargin
+    )
   )
 
   check(
@@ -885,7 +891,13 @@ class CompletionArgSuite extends BaseCompletionSuite {
     """|aaa = : Int
        |assert(assertion: Boolean): Unit
        |""".stripMargin,
-    topLines = Some(2)
+    topLines = Some(2),
+    compat = Map(
+      "3" ->
+        """|aaa = : Int
+           |assert(inline assertion: Boolean): Unit
+           |""".stripMargin
+    )
   )
 
   check(
@@ -998,7 +1010,7 @@ class CompletionArgSuite extends BaseCompletionSuite {
        |""".stripMargin,
     """|aaa = : Int
        |abb = : Option[Int]
-       |assert(assertion: Boolean): Unit
+       |assert(inline assertion: Boolean): Unit
        |""".stripMargin,
     topLines = Some(3)
   )
@@ -1012,7 +1024,7 @@ class CompletionArgSuite extends BaseCompletionSuite {
        |""".stripMargin,
     """|aaa = : Int
        |abb = : Option[Int]
-       |assert(assertion: Boolean): Unit
+       |assert(inline assertion: Boolean): Unit
        |""".stripMargin,
     topLines = Some(3)
   )
@@ -1033,7 +1045,7 @@ class CompletionArgSuite extends BaseCompletionSuite {
        |""".stripMargin,
     """|aaa = : Int
        |abb = : Option[Int]
-       |assert(assertion: Boolean): Unit
+       |assert(inline assertion: Boolean): Unit
        |""".stripMargin,
     topLines = Some(3)
   )
@@ -1051,7 +1063,7 @@ class CompletionArgSuite extends BaseCompletionSuite {
        |""".stripMargin,
     """|abb = : Option[Int]
        |acc = : List[Int]
-       |assert(assertion: Boolean): Unit
+       |assert(inline assertion: Boolean): Unit
        |""".stripMargin,
     topLines = Some(3)
   )
@@ -1213,6 +1225,28 @@ class CompletionArgSuite extends BaseCompletionSuite {
        |""".stripMargin,
     """|str = : String
        |""".stripMargin,
+    topLines = Some(1)
+  )
+
+  check(
+    "null-symbol",
+    """|object O {
+       |  val t1 = true
+       |  val t2 = true
+       |  val f1 = false
+       |
+       |  (t1, t2, f1) match {
+       |    case (_, false, false) => prinl=t@@n()
+       |    case (true, _, true) => println("KO")
+       |    case _ => println("OK")
+       |  }
+       |}
+       |""".stripMargin,
+    "",
+    compat = Map(
+      "3" -> """|t1: Boolean
+                |""".stripMargin
+    ),
     topLines = Some(1)
   )
 

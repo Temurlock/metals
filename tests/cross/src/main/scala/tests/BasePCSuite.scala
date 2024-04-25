@@ -274,14 +274,13 @@ abstract class BasePCSuite extends BaseSuite with PCSuite {
         version.startsWith("2.") && version.contains("-bin-")
       )
 
+  object IgnoreScala213 extends IgnoreScalaVersion(_.startsWith("2.13"))
+
   object IgnoreScala212 extends IgnoreScalaVersion(_.startsWith("2.12"))
 
   object IgnoreScala211 extends IgnoreScalaVersion(_.startsWith("2.11"))
 
   object IgnoreScala3 extends IgnoreScalaVersion(_.startsWith("3."))
-
-  val IgnoreForScala3CompilerPC: IgnoreScalaVersion =
-    IgnoreScalaVersion.forLaterOrEqualTo(BuildInfoVersions.firstScala3PCVersion)
 
   case class RunForScalaVersion(versions: Set[String])
       extends Tag("RunScalaVersion")

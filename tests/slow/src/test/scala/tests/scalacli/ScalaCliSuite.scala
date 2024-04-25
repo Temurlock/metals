@@ -8,9 +8,7 @@ import scala.meta.internal.metals.InitializationOptions
 import scala.meta.internal.metals.JsonParser._
 import scala.meta.internal.metals.Messages
 import scala.meta.internal.metals.MetalsEnrichments._
-import scala.meta.internal.metals.MetalsServerConfig
 import scala.meta.internal.metals.ServerCommands
-import scala.meta.internal.metals.SlowTaskConfig
 import scala.meta.internal.metals.debug.TestDebugger
 import scala.meta.internal.metals.scalacli.ScalaCli
 import scala.meta.internal.metals.{BuildInfo => V}
@@ -19,8 +17,6 @@ import org.eclipse.{lsp4j => l}
 import tests.FileLayout
 
 class ScalaCliSuite extends BaseScalaCliSuite(V.scala3) {
-  override def serverConfig: MetalsServerConfig =
-    MetalsServerConfig.default.copy(slowTask = SlowTaskConfig.on)
 
   override protected def initializationOptions: Option[InitializationOptions] =
     Some(
@@ -85,6 +81,7 @@ class ScalaCliSuite extends BaseScalaCliSuite(V.scala3) {
         completion,
         """|pprint
            |pprint_native0.4
+           |pprint_native0.5
            |pprint_sjs1
            |""".stripMargin,
       )
@@ -180,44 +177,47 @@ class ScalaCliSuite extends BaseScalaCliSuite(V.scala3) {
         completion,
         """|pprint
            |pprint_native0.4
+           |pprint_native0.5
            |pprint_sjs1
            |""".stripMargin,
       )
 
       _ <- server.didChangeConfiguration(
-        """{
-          |  "show-implicit-arguments": true,
-          |  "show-implicit-conversions-and-classes": true,
-          |  "show-inferred-type": true
-          |}
-          |""".stripMargin
+        """|{"inlayHints": {
+           |  "inferredTypes": {"enable":true},
+           |  "implicitConversions": {"enable":true},
+           |  "implicitArguments": {"enable":true},
+           |  "typeParameters": {"enable":true},
+           |  "hintsInPatternMatch": {"enable":true}
+           |}}
+           |""".stripMargin
       )
 
       _ <- server.didOpen("MyTests.sc")
-      _ = assertNoDiff(
-        client.syntheticDecorations,
-        s"""#!/usr/bin/env -S scala-cli shebang --java-opt -Xms256m --java-opt -XX:MaxRAMPercentage=80 
-           |//> using scala "$scalaVersion"
-           |//> using lib "com.lihaoyi::utest::0.7.10"
-           |//> using lib com.lihaoyi::pprint::0.6.6
-           |
-           |import foo.Foo
-           |import utest._
-           | 
-           |pprint.log[Int](2)(generate, generate) // top-level statement should be fine in a script
-           |
-           |object MyTests extends TestSuite {
-           |  pprint.log[Int](2)(generate, generate)
-           |  val tests: Tests = Tests {
-           |    test("foo") {
-           |      assert(2 + 2 == 4)
-           |    }
-           |    test("nope") {
-           |      assert(2 + 2 == (new Foo).value)
-           |    }
-           |  }
-           |}
-           |""".stripMargin,
+      _ <- server.assertInlayHints(
+        "MyTests.sc",
+        s"""|#!/usr/bin/env -S scala-cli shebang --java-opt -Xms256m --java-opt -XX:MaxRAMPercentage=80 
+            |//> using scala "$scalaVersion"
+            |//> using lib "com.lihaoyi::utest::0.7.10"
+            |//> using lib com.lihaoyi::pprint::0.6.6
+            |
+            |import foo.Foo
+            |import utest._
+            | 
+            |pprint.log/*[Int<<scala/Int#>>]*/(2)/*(using generate<<sourcecode/LineMacros#generate().>>, generate<<sourcecode/FileNameMacros#generate().>>)*/ // top-level statement should be fine in a script
+            |
+            |object MyTests extends TestSuite {
+            |  pprint.log/*[Int<<scala/Int#>>]*/(2)/*(using generate<<sourcecode/LineMacros#generate().>>, generate<<sourcecode/FileNameMacros#generate().>>)*/
+            |  val tests/*: Tests<<utest/Tests#>>*/ = Tests {
+            |    test("foo") {
+            |      assert(2 + 2 == 4)
+            |    }
+            |    test("nope") {
+            |      assert(2 + 2 == (new Foo).value)
+            |    }
+            |  }
+            |}
+            |""".stripMargin,
       )
     } yield ()
 
@@ -308,10 +308,26 @@ class ScalaCliSuite extends BaseScalaCliSuite(V.scala3) {
         "new Fo@@o",
         "foo.sc",
       )
-    } yield ()
+    } yield {
+      val indexingCount = client.progressParams
+        .stream()
+        .filter { params =>
+          if (params.getValue().isLeft()) {
+            params.getValue().getLeft() match {
+              case begin: l.WorkDoneProgressBegin =>
+                begin.getTitle() == "Indexing"
+              case _ => false
+            }
+          } else false
+        }
+        .count()
+        .toInt
+      assertEquals(indexingCount, 1, "should index only once")
+    }
   }
 
   test("inner") {
+    cleanWorkspace()
     for {
       _ <- scalaCliInitialize(useBsp = false)(
         s"""|/inner/project.scala

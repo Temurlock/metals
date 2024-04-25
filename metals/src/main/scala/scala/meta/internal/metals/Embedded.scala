@@ -27,7 +27,7 @@ import mdoc.interfaces.Mdoc
  * - mdoc
  */
 final class Embedded(
-    statusBar: StatusBar
+    workDoneProgress: WorkDoneProgress
 ) extends Cancelable {
 
   private val mdocs: TrieMap[String, URLClassLoader] =
@@ -49,7 +49,7 @@ final class Embedded(
       if (isScala3) Some(scalaVersion) else None
     val classloader = mdocs.getOrElseUpdate(
       scalaVersionKey,
-      statusBar.trackSlowTask("Preparing worksheets") {
+      workDoneProgress.trackBlocking("Preparing worksheets") {
         newMdocClassLoader(scalaBinaryVersion, resolveSpecificVersionCompiler)
       },
     )
@@ -150,7 +150,8 @@ final class Embedded(
       pathString.contains("mdoc") ||
       pathString.contains("scalameta") ||
       pathString.contains("metaconfig") ||
-      pathString.contains("diffutils")
+      pathString.contains("diffutils") ||
+      pathString.contains("scala-sbt")
     }
     val urls = runtimeClasspath.iterator.map(_.toUri().toURL()).toArray
     new URLClassLoader(urls, parent)

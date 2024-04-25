@@ -72,7 +72,7 @@ class JavaDefinitionSuite extends BaseLspSuite("java-definition") {
        |                      ^^^^^^
        |""".stripMargin,
     dependencies = List(
-      "org.jboss.xnio:xnio-nio:3.8.12.Final"
+      "org.jboss.xnio:xnio-nio:3.8.13.Final"
     ),
     withoutVirtualDocs = true,
     useWorkspaceFolders = true,
@@ -89,7 +89,7 @@ class JavaDefinitionSuite extends BaseLspSuite("java-definition") {
        |                      ^^^^^^
        |""".stripMargin,
     dependencies = List(
-      "org.jboss.xnio:xnio-nio:3.8.12.Final"
+      "org.jboss.xnio:xnio-nio:3.8.13.Final"
     ),
   )
 
@@ -195,7 +195,7 @@ class JavaDefinitionSuite extends BaseLspSuite("java-definition") {
 
   private def renderLocation(
       loc: l.Location,
-      folderRoot: AbsolutePath = workspace,
+      folderRoot: AbsolutePath,
   ): String = {
     val path = AbsolutePath.fromAbsoluteUri(URI.create(loc.getUri()))
     val relativePath =

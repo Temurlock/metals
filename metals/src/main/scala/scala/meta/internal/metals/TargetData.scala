@@ -9,6 +9,10 @@ import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import scala.collection.mutable.{Map => MMap}
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.concurrent.Promise
+import scala.util.Properties
 
 import scala.meta.inputs.Input
 import scala.meta.internal.metals.MetalsEnrichments._
@@ -16,7 +20,11 @@ import scala.meta.io.AbsolutePath
 
 import ch.epfl.scala.bsp4j.BuildTarget
 import ch.epfl.scala.bsp4j.BuildTargetIdentifier
+import ch.epfl.scala.bsp4j.DependencyModulesResult
 import ch.epfl.scala.bsp4j.JavacOptionsResult
+import ch.epfl.scala.bsp4j.JvmCompileClasspathParams
+import ch.epfl.scala.bsp4j.MavenDependencyModule
+import ch.epfl.scala.bsp4j.MavenDependencyModuleArtifact
 import ch.epfl.scala.bsp4j.ScalacOptionsResult
 import ch.epfl.scala.bsp4j.SourceItem
 import ch.epfl.scala.bsp4j.SourceItemKind.DIRECTORY
@@ -40,6 +48,11 @@ final class TargetData {
     TrieMap.empty[BuildTargetIdentifier, ListBuffer[BuildTargetIdentifier]]
   val buildTargetSources: MMap[BuildTargetIdentifier, util.Set[AbsolutePath]] =
     TrieMap.empty[BuildTargetIdentifier, util.Set[AbsolutePath]]
+  val buildTargetClasspath: MMap[BuildTargetIdentifier, List[String]] =
+    TrieMap.empty[BuildTargetIdentifier, List[String]]
+  val buildTargetDependencyModules
+      : MMap[BuildTargetIdentifier, List[MavenDependencyModule]] =
+    TrieMap.empty[BuildTargetIdentifier, List[MavenDependencyModule]]
   val inverseDependencySources: MMap[AbsolutePath, Set[BuildTargetIdentifier]] =
     TrieMap.empty[AbsolutePath, Set[BuildTargetIdentifier]]
   val buildTargetGeneratedDirs: MMap[AbsolutePath, Unit] =
@@ -94,6 +107,8 @@ final class TargetData {
     scalaTargetInfo.get(id)
   def javaTarget(id: BuildTargetIdentifier): Option[JavaTarget] =
     javaTargetInfo.get(id)
+  def jvmTarget(id: BuildTargetIdentifier): Option[JvmTarget] =
+    scalaTarget(id).orElse(javaTarget(id))
 
   private val sourceBuildTargetsCache =
     new util.concurrent.ConcurrentHashMap[AbsolutePath, Option[
@@ -120,24 +135,99 @@ final class TargetData {
   def info(id: BuildTargetIdentifier): Option[BuildTarget] =
     buildTargetInfo.get(id)
 
+  /**
+   * Get jars for a specific build target.
+   *
+   * We first try to use buildTargetDependencyModules
+   * request since it should be low cost for build tools
+   * like Bazel.
+   *
+   * We fall back to reading from classpath only if the
+   * classpath is read eagerly.
+   *
+   * @param id id of the queried target
+   * @return depenendency jar list if available
+   */
   def targetJarClasspath(
       id: BuildTargetIdentifier
   ): Option[List[AbsolutePath]] = {
-    val scalacData = scalaTarget(id).map(_.scalac.jarClasspath)
-    val javacData = javaTarget(id).map(_.javac.jarClasspath)
-    scalacData
-      .flatMap(s => javacData.map(j => (s ::: j).distinct).orElse(scalacData))
-      .orElse(javacData)
+    buildTargetDependencyModules.get(id) match {
+      case None =>
+        jvmTarget(id).flatMap { target =>
+          target.jarClasspath
+        }
+      case Some(value) =>
+        Some(value.flatMap(_.getArtifacts().asScala).collect {
+          case artifact: MavenDependencyModuleArtifact
+              if artifact.getClassifier() == null =>
+            artifact.getUri().toAbsolutePath
+        })
+    }
   }
 
   def targetClasspath(
-      id: BuildTargetIdentifier
-  ): Option[List[String]] = {
-    val scalacData = scalaTarget(id).map(_.scalac.classpath)
-    val javacData = javaTarget(id).map(_.javac.classpath)
-    scalacData
-      .flatMap(s => javacData.map(j => (s ::: j).distinct).orElse(scalacData))
-      .orElse(javacData)
+      id: BuildTargetIdentifier,
+      cancelPromise: Promise[Unit],
+  )(implicit ec: ExecutionContext): Option[Future[List[String]]] = {
+    targetToConnection.get(id).zip(jvmTarget(id)).map {
+      case (bspConnection, jvmTarget) =>
+        val classpath =
+          jvmTarget.classpath.orElse(buildTargetClasspath.get(id)) match {
+            case None =>
+              bspConnection
+                .buildTargetJvmClasspath(
+                  new JvmCompileClasspathParams(List(id).asJava),
+                  cancelPromise,
+                )
+                .map { classpathResult =>
+                  val classpath = classpathResult
+                    .getItems()
+                    .asScala
+                    .map(_.getClasspath().asScala)
+                    .flatten
+                    .toList
+                  buildTargetClasspath.put(id, classpath)
+                  classpath
+                }
+            case Some(classpath) => Future.successful(classpath)
+          }
+
+        classpath.map { classes =>
+          val outputClasses = jvmTarget.classDirectory
+          if (classes.contains(outputClasses)) classes
+          else outputClasses :: classes
+        }
+
+    }
+  }
+
+  def findSourceJarOf(
+      jar: AbsolutePath,
+      targetId: Option[BuildTargetIdentifier],
+  ): Option[AbsolutePath] = {
+    val jarUri = jar.toURI.toString()
+    def depModules: Iterator[MavenDependencyModule] = targetId match {
+      case None => buildTargetDependencyModules.values.flatten.iterator
+      case Some(id) => buildTargetDependencyModules.get(id).iterator.flatten
+    }
+
+    /**
+     * For windows file:///C:/Users/runneradmin/AppData/Local/Coursier/Cache and
+     * file:///C:/Users/runneradmin/AppData/Local/Coursier/cache is equivalent
+     */
+    def isUriEqual(uri: String, otherUri: String) = {
+      Properties.isWin && uri.toLowerCase() == otherUri
+        .toLowerCase() || uri == otherUri
+    }
+    val allFound = for {
+      module <- depModules
+      artifacts = module.getArtifacts().asScala
+      if artifacts.exists(artifact => isUriEqual(artifact.getUri(), jarUri))
+      sourceJar <- artifacts.find(_.getClassifier() == "sources")
+      sourceJarPath = sourceJar.getUri().toAbsolutePath
+      if sourceJarPath.exists
+    } yield sourceJarPath
+    allFound.headOption
   }
 
   def targetClassDirectories(id: BuildTargetIdentifier): List[String] = {
@@ -290,6 +380,18 @@ final class TargetData {
       mapped: TargetData.MappedSource,
   ): Unit =
     actualSources(path) = mapped
+
+  def addDependencyModules(
+      dependencyModules: DependencyModulesResult
+  ): Unit = {
+    dependencyModules.getItems().asScala.groupBy(_.getTarget()).foreach {
+      case (id, items) =>
+        val modules = items
+          .flatMap(_.getModules().asScala)
+          .flatMap(_.asMavenDependencyModule)
+        buildTargetDependencyModules.put(id, modules.toList)
+    }
+  }
 
   def resetConnections(
       idToConn: List[(BuildTargetIdentifier, BuildServerConnection)]

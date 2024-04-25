@@ -48,12 +48,6 @@ class DelegatingLanguageClient(var underlying: MetalsLanguageClient)
     underlying.metalsStatus(params)
   }
 
-  override def metalsSlowTask(
-      params: MetalsSlowTaskParams
-  ): CompletableFuture[MetalsSlowTaskResult] = {
-    underlying.metalsSlowTask(params)
-  }
-
   override def telemetryEvent(value: Any): Unit = {
     underlying.telemetryEvent(value)
   }
@@ -110,6 +104,10 @@ class DelegatingLanguageClient(var underlying: MetalsLanguageClient)
 
   override def refreshModel(): CompletableFuture[Unit] =
     underlying.refreshModel()
+
+  override def refreshInlayHints(): CompletableFuture[Void] = {
+    underlying.refreshInlayHints()
+  }
 
   override def configuration(
       configurationParams: ConfigurationParams

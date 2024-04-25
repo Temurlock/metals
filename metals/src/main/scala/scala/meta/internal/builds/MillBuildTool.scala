@@ -94,6 +94,10 @@ case class MillBuildTool(
     else "--predef" :: predefScriptPath.toString :: Nil
   }
 
+  override def cleanupStaleConfig(): Unit = {
+    // no need to cleanup, the plugin deals with that
+  }
+
   private def bloopCmd(millVersion: String) = {
     // Bloop was moved to the bloop package in 0.9.3
     // https://github.com/com-lihaoyi/mill/pull/992
@@ -136,7 +140,7 @@ case class MillBuildTool(
       workspace: AbsolutePath
   ): Option[List[String]] =
     Option.when(workspaceSupportsBsp(workspace: AbsolutePath)) {
-      val cmd = "mill.bsp.BSP/install" :: Nil
+      val cmd = "mill.bsp.BSP/install" :: "--jobs" :: "0" :: Nil
       putTogetherArgs(cmd, getMillVersion(projectRoot), workspace)
     }
 

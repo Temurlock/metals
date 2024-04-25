@@ -3,6 +3,7 @@ package scala.meta.internal.metals
 import scala.meta.internal.metals.Configs.GlobSyntaxConfig
 import scala.meta.internal.metals.config.DoctorFormat
 import scala.meta.internal.metals.config.StatusBarState
+import scala.meta.pc.ContentType
 
 import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.InitializeParams
@@ -75,12 +76,13 @@ final class ClientConfiguration(
       .map(Icons.fromString)
       .getOrElse(initialConfig.icons)
 
-  def slowTaskIsOn(): Boolean =
-    extract(
-      initializationOptions.slowTaskProvider,
-      experimentalCapabilities.slowTaskProvider,
-      initialConfig.slowTask.isOn,
-    )
+  def hasWorkDoneProgressCapability(): Boolean =
+    (for {
+      params <- initializeParams
+      capabilities <- Option(params.getCapabilities())
+      window <- Option(capabilities.getWindow())
+      workDoneProgress <- Option(window.getWorkDoneProgress())
+    } yield workDoneProgress.booleanValue()).getOrElse(false)
 
   def isExecuteClientCommandProvider(): Boolean =
     extract(
@@ -151,6 +153,26 @@ final class ClientConfiguration(
 
   def isInlineDecorationProvider(): Boolean =
     initializationOptions.inlineDecorationProvider.getOrElse(false)
+
+  def isInlayHintsEnabled(): Boolean = {
+    for {
+      capabilities <- clientCapabilities
+      textDocumentCapabilities <- Option(capabilities.getTextDocument())
+      inlayHintsCapabilities <- Option(textDocumentCapabilities.getInlayHint())
+    } yield true
+  }.getOrElse(false)
+
+  def hoverContentType(): ContentType =
+    (for {
+      capabilities <- clientCapabilities
+      textDocumentCapabilities <- Option(capabilities.getTextDocument())
+      hoverCapabilities <- Option(textDocumentCapabilities.getHover())
+      contentTypes <- Option(hoverCapabilities.getContentFormat())
+    } yield {
+      if (contentTypes.contains(ContentType.MARKDOWN.toString()))
+        ContentType.MARKDOWN
+      else ContentType.PLAINTEXT
+    }).getOrElse(ContentType.MARKDOWN)
 
   def isTreeViewProvider(): Boolean =
     extract(

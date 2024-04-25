@@ -43,7 +43,6 @@ class MultipleBuildFilesLspSuite
           // Project has no .bloop directory so user is asked to "import via bloop"
           chooseBuildToolMessage,
           importBuildMessage,
-          progressMessage,
         ).mkString("\n"),
       )
       _ = client.messageRequests.clear() // restart
@@ -56,12 +55,9 @@ class MultipleBuildFilesLspSuite
     } yield {
       assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Ensure that after a choice was made, the user doesn't get re-prompted
-          // to choose their build tool again
-          importBuildChangesMessage,
-          progressMessage,
-        ).mkString("\n"),
+        // Ensure that after a choice was made, the user doesn't get re-prompted
+        // to choose their build tool again
+        importBuildChangesMessage,
       )
     }
   }
@@ -83,6 +79,28 @@ class MultipleBuildFilesLspSuite
       _ <- server.server.indexingPromise.future
       _ = assert(server.server.bspSession.nonEmpty)
       _ = assert(server.server.bspSession.get.main.name == "custom")
+    } yield ()
+  }
+
+  test("custom-bsp-2") {
+    cleanWorkspace()
+    client.chooseBuildTool = actions =>
+      actions
+        .find(_.getTitle == "Custom")
+        .getOrElse(throw new Exception("no Custom as build tool"))
+    for {
+      _ <- initialize(
+        s"""|/.bsp/custom.json
+            |${ScalaCli.scalaCliBspJsonContent(bspName = "Custom")}
+            |/.bsp/other-custom.json
+            |${ScalaCli.scalaCliBspJsonContent(bspName = "Other custom")}
+            |/build.sbt
+            |scalaVersion := "${V.scala213}"
+            |""".stripMargin
+      )
+      _ <- server.server.indexingPromise.future
+      _ = assert(server.server.bspSession.nonEmpty)
+      _ = assert(server.server.bspSession.get.main.name == "Custom")
     } yield ()
   }
 

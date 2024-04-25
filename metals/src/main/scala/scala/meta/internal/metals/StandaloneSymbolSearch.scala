@@ -11,6 +11,7 @@ import scala.meta.internal.mtags.Mtags
 import scala.meta.internal.mtags.OnDemandSymbolIndex
 import scala.meta.internal.parsing.Trees
 import scala.meta.io.AbsolutePath
+import scala.meta.pc.ContentType
 import scala.meta.pc.ParentSymbols
 import scala.meta.pc.SymbolDocumentation
 import scala.meta.pc.SymbolSearch
@@ -65,11 +66,20 @@ class StandaloneSymbolSearch(
       symbol: String,
       parents: ParentSymbols,
   ): ju.Optional[SymbolDocumentation] =
+    documentation(symbol, parents, docstringContentType = ContentType.MARKDOWN)
+
+  override def documentation(
+      symbol: String,
+      parents: ParentSymbols,
+      docstringContentType: ContentType,
+  ): ju.Optional[SymbolDocumentation] =
     docs
-      .documentation(symbol, parents)
+      .documentation(symbol, parents, docstringContentType)
       .asScala
       .orElse(
-        workspaceFallback.flatMap(_.documentation(symbol, parents).asScala)
+        workspaceFallback.flatMap(
+          _.documentation(symbol, parents, docstringContentType).asScala
+        )
       )
       .asJava
 
@@ -132,6 +142,7 @@ object StandaloneSymbolSearch {
       buildTargets: BuildTargets,
       saveSymbolFileToDisk: Boolean,
       sourceMapper: SourceMapper,
+      workspaceFallback: Option[SymbolSearch] = None,
   )(implicit rc: ReportContext): StandaloneSymbolSearch = {
     val (sourcesWithExtras, classpathWithExtras) =
       addScalaAndJava(
@@ -151,32 +162,7 @@ object StandaloneSymbolSearch {
       buildTargets,
       saveSymbolFileToDisk,
       sourceMapper,
-    )
-  }
-  def apply(
-      scalaVersion: String,
-      workspace: AbsolutePath,
-      buffers: Buffers,
-      excludedPackages: () => ExcludedPackagesHandler,
-      userConfig: () => UserConfiguration,
-      trees: Trees,
-      buildTargets: BuildTargets,
-      saveSymbolFileToDisk: Boolean,
-      sourceMapper: SourceMapper,
-  )(implicit rc: ReportContext): StandaloneSymbolSearch = {
-    val (sourcesWithExtras, classpathWithExtras) =
-      addScalaAndJava(scalaVersion, Nil, Nil, userConfig().javaHome)
-
-    new StandaloneSymbolSearch(
-      workspace,
-      classpathWithExtras,
-      sourcesWithExtras,
-      buffers,
-      excludedPackages,
-      trees,
-      buildTargets,
-      saveSymbolFileToDisk,
-      sourceMapper,
+      workspaceFallback,
     )
   }
 
@@ -236,7 +222,7 @@ object StandaloneSymbolSearch {
 
     download(scalaVersion).toSeq
       .map(path => AbsolutePath(path))
-      .partition(_.toString.endsWith("-sources.jar"))
+      .partition(_.isSourcesJar)
   }
 
 }

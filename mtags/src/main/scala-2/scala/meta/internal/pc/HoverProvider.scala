@@ -6,11 +6,16 @@ import scala.reflect.internal.{Flags => gf}
 import scala.meta.internal.metals.Report
 import scala.meta.internal.metals.ReportContext
 import scala.meta.internal.mtags.MtagsEnrichments._
+import scala.meta.pc.ContentType
 import scala.meta.pc.HoverSignature
 import scala.meta.pc.OffsetParams
 import scala.meta.pc.RangeParams
 
-class HoverProvider(val compiler: MetalsGlobal, params: OffsetParams)(implicit
+class HoverProvider(
+    val compiler: MetalsGlobal,
+    params: OffsetParams,
+    contentType: ContentType
+)(implicit
     reportContext: ReportContext
 ) {
   import compiler._
@@ -211,6 +216,17 @@ class HoverProvider(val compiler: MetalsGlobal, params: OffsetParams)(implicit
       range: Position,
       report: => Option[Report] = None
   ): Option[HoverSignature] = {
+
+    def docstring =
+      if (metalsConfig.isHoverDocumentationEnabled) {
+        symbolDocumentation(symbol, contentType)
+          .filter(docs => !docs.docstring().isEmpty())
+          .orElse(symbolDocumentation(symbol.companion, contentType))
+          .fold("")(_.docstring())
+      } else {
+        ""
+      }
+
     val result =
       if (tpe == null || tpe.isErroneous || tpe == NoType) None
       else if (
@@ -228,7 +244,8 @@ class HoverProvider(val compiler: MetalsGlobal, params: OffsetParams)(implicit
           new ScalaHover(
             expressionType = Some(prettyType),
             range = lspRange,
-            contextInfo = history.getUsedRenamesInfo()
+            contextInfo = history.getUsedRenamesInfo(),
+            contentType = contentType
           )
         )
       } else if (symbol == null || tpe.typeSymbol.isAnonymousClass) None
@@ -238,7 +255,9 @@ class HoverProvider(val compiler: MetalsGlobal, params: OffsetParams)(implicit
             expressionType = Some(
               s"${symbol.javaClassSymbol.keyString} ${symbol.fullName}"
             ),
-            contextInfo = Nil
+            contextInfo = Nil,
+            docstring = if (symbol.hasModuleFlag) Some(docstring) else None,
+            contentType = contentType
           )
         )
       } else {
@@ -269,12 +288,6 @@ class HoverProvider(val compiler: MetalsGlobal, params: OffsetParams)(implicit
           else ""
         val prettySignature =
           printer.defaultMethodSignature(flags) + macroSuffix
-        val docstring =
-          if (metalsConfig.isHoverDocumentationEnabled) {
-            symbolDocumentation(symbol).fold("")(_.docstring())
-          } else {
-            ""
-          }
         Some(
           ScalaHover(
             expressionType = Some(prettyType),
@@ -283,7 +296,8 @@ class HoverProvider(val compiler: MetalsGlobal, params: OffsetParams)(implicit
             forceExpressionType =
               pos.start != pos.end || !prettySignature.endsWith(prettyType),
             range = if (range.isRange) Some(range.toLsp) else None,
-            contextInfo = history.getUsedRenamesInfo()
+            contextInfo = history.getUsedRenamesInfo(),
+            contentType = contentType
           )
         )
       }

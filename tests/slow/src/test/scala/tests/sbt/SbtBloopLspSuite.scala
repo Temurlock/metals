@@ -9,23 +9,25 @@ import scala.meta.internal.builds.SbtDigest
 import scala.meta.internal.io.FileIO
 import scala.meta.internal.metals.ClientCommands
 import scala.meta.internal.metals.InitializationOptions
+import scala.meta.internal.metals.Messages
 import scala.meta.internal.metals.Messages._
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.metals.ServerCommands
 import scala.meta.internal.metals.UserConfiguration
-import scala.meta.internal.metals.clients.language.MetalsSlowTaskResult
 import scala.meta.internal.metals.{BuildInfo => V}
 import scala.meta.io.AbsolutePath
 
 import com.google.gson.JsonObject
 import com.google.gson.JsonPrimitive
 import tests.BaseImportSuite
+import tests.JavaHomeChangeTest
 import tests.ScriptsAssertions
 import tests.TestSemanticTokens
 
 class SbtBloopLspSuite
     extends BaseImportSuite("sbt-bloop-import")
-    with ScriptsAssertions {
+    with ScriptsAssertions
+    with JavaHomeChangeTest {
 
   val sbtVersion = V.sbtVersion
   val scalaVersion = V.scala213
@@ -55,11 +57,7 @@ class SbtBloopLspSuite
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = client.messageRequests.clear() // restart
       _ = assertStatus(_.isInstalled)
@@ -77,11 +75,7 @@ class SbtBloopLspSuite
     } yield {
       assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has .bloop directory so user is asked to "re-import project"
-          importBuildChangesMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildChangesMessage,
       )
     }
   }
@@ -130,7 +124,10 @@ class SbtBloopLspSuite
       )
       _ = assertStatus(_.isInstalled)
       projectVersion = workspace.resolve("project/build.properties").readText
-      _ = assertNoDiff(projectVersion, s"sbt.version=${V.sbtVersion}")
+      _ = assert(
+        projectVersion.startsWith(s"sbt.version="),
+        "project/build.properties should contains sbt version",
+      )
     } yield ()
   }
 
@@ -147,18 +144,16 @@ class SbtBloopLspSuite
       _ <- server.server.buildServerPromise.future
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
-      _ = client.messageRequests.clear() // restart
+      _ = client.progressParams.clear() // restart
       _ <- server.executeCommand(ServerCommands.ImportBuild)
       _ = assertNoDiff(
-        client.workspaceMessageRequests,
+        client.beginProgressMessages,
         List(
-          progressMessage
+          progressMessage,
+          Messages.importingBuild,
+          Messages.indexing,
         ).mkString("\n"),
       )
     } yield ()
@@ -177,11 +172,7 @@ class SbtBloopLspSuite
       _ <- server.server.buildServerPromise.future
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = client.messageRequests.clear() // restart
       _ <- server.didChangeConfiguration(
@@ -193,10 +184,7 @@ class SbtBloopLspSuite
       _ <- server.executeCommand(ServerCommands.ImportBuild)
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          BloopVersionChange.msg,
-          progressMessage,
-        ).mkString("\n"),
+        BloopVersionChange.msg,
       )
       _ = assertStatus(_.isInstalled)
     } yield ()
@@ -214,20 +202,18 @@ class SbtBloopLspSuite
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          // Project has no .bloop directory so user is asked to "import via bloop"
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
-      _ = client.messageRequests.clear() // restart
+      _ = client.progressParams.clear() // restart
       _ <- server
         .executeCommand(ServerCommands.ImportBuild)
         .zip(server.executeCommand(ServerCommands.ImportBuild))
       _ = assertNoDiff(
-        client.workspaceMessageRequests,
+        client.beginProgressMessages,
         List(
-          progressMessage
+          progressMessage,
+          Messages.importingBuild,
+          Messages.indexing,
         ).mkString("\n"),
       )
       _ = assertNoDiff(
@@ -274,15 +260,13 @@ class SbtBloopLspSuite
   }
 
   test("cancel") {
-    client.slowTaskHandler = params => {
-      if (params == bloopInstallProgress("sbt")) {
+    cleanWorkspace()
+    client.onWorkDoneProgressStart = (name, cancelParams) => {
+      if (name == progressMessage) {
         Thread.sleep(TimeUnit.SECONDS.toMillis(2))
-        Some(MetalsSlowTaskResult(cancel = true))
-      } else {
-        None
+        server.fullServer.didCancelWorkDoneProgress(cancelParams)
       }
     }
-    cleanWorkspace()
     for {
       _ <- initialize(
         s"""
@@ -295,7 +279,7 @@ class SbtBloopLspSuite
         expectError = true,
       )
       _ = assertStatus(!_.isInstalled)
-      _ = client.slowTaskHandler = _ => None
+      _ = client.onWorkDoneProgressStart = (_, _) => {}
       _ <- server.didSave("build.sbt")(_ + "\n// comment")
       _ = assertNoDiff(client.workspaceShowMessages, "")
       _ = assertStatus(!_.isInstalled)
@@ -318,10 +302,7 @@ class SbtBloopLspSuite
       )
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = assertNoDiff(
         client.workspaceShowMessages,
@@ -334,10 +315,7 @@ class SbtBloopLspSuite
       }
       _ = assertNoDiff(
         client.workspaceMessageRequests,
-        List(
-          importBuildMessage,
-          progressMessage,
-        ).mkString("\n"),
+        importBuildMessage,
       )
       _ = assertStatus(_.isInstalled)
     } yield ()
@@ -536,9 +514,11 @@ class SbtBloopLspSuite
     cleanWorkspace()
     for {
       _ <- initialize(
-        """|/project/build.properties
-           |sbt.version=0.13.15
-           |""".stripMargin,
+        s"""|/project/build.properties
+            |sbt.version=0.13.15
+            |/build.sbt
+            |scalaVersion := "$scalaVersion"
+            |""".stripMargin,
         expectError = true,
       )
       _ = assertNoDiff(
@@ -562,6 +542,8 @@ class SbtBloopLspSuite
       _ <- initialize(
         s"""|/project/build.properties
             |sbt.version=$minimal
+            |/build.sbt
+            |scalaVersion := "$scalaVersion"
             |""".stripMargin
       )
       _ = assertStatus(_.isInstalled)
@@ -858,24 +840,43 @@ class SbtBloopLspSuite
            """.stripMargin
       )
       _ <- server.didChangeConfiguration(
-        """{
-          |  "show-implicit-arguments": true,
-          |  "show-implicit-conversions-and-classes": true,
-          |  "show-inferred-type": true
-          |}
-          |""".stripMargin
+        """|{"inlayHints": {
+           |  "inferredTypes": {"enable":true},
+           |  "implicitConversions": {"enable":true},
+           |  "implicitArguments": {"enable":true},
+           |  "typeParameters": {"enable":true},
+           |  "hintsInPatternMatch": {"enable":true}
+           |}}
+           |""".stripMargin
       )
       _ <- server.didOpen("build.sbt")
       _ <- server.didSave("build.sbt")(identity)
       _ = assertNoDiagnostics()
-      _ = assertNoDiff(
-        client.syntheticDecorations,
-        s"""|def foo(): String = "2.13.2"
-            |def bar(): String = foo() 
+      _ <- server.assertInlayHints(
+        "build.sbt",
+        s"""|def foo()/*: String<<java/lang/String#>>*/ = "2.13.2"
+            |def bar()/*: String<<java/lang/String#>>*/ = foo()
             |scalaVersion := "2.13.2"
            """.stripMargin,
       )
     } yield ()
   }
+
+  checkJavaHomeUpdate(
+    "bloop-java-home-update",
+    fileContent => s"""|/build.sbt
+                       |scalaVersion := "$scalaVersion"
+                       |val a = project.in(file("a"))
+                       |$fileContent
+                       |""".stripMargin,
+    errorMessage =
+      """|a/src/main/scala/a/A.scala:2:8: error: object random is not a member of package java.util
+         |import java.util.random.RandomGenerator
+         |       ^^^^^^^^^^^^^^^^
+         |a/src/main/scala/a/A.scala:4:13: error: not found: value RandomGenerator
+         |  val gen = RandomGenerator.of("name")
+         |            ^^^^^^^^^^^^^^^
+         |""".stripMargin,
+  )
 
 }

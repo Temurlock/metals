@@ -24,8 +24,8 @@ import dotty.tools.dotc.core.Names.Name
 import dotty.tools.dotc.core.StdNames
 import dotty.tools.dotc.core.Symbols.NoSymbol
 import dotty.tools.dotc.core.Symbols.Symbol
-import dotty.tools.dotc.core.Types.Type
 import dotty.tools.dotc.core.Types.*
+import dotty.tools.dotc.core.Types.Type
 
 class MetalsPrinter(
     names: ShortenedNames,
@@ -403,7 +403,8 @@ class MetalsPrinter(
         else if includeDefaultParam == MetalsPrinter.IncludeDefaultParam.ResolveLater && isDefaultParam
         then " = ..."
         else "" // includeDefaultParam == Never or !isDefaultParam
-      s"$keywordName: ${paramTypeString}$default"
+      val inline = if(param.is(Flags.Inline)) "inline " else ""
+      s"$inline$keywordName: ${paramTypeString}$default"
     end if
   end paramLabel
 

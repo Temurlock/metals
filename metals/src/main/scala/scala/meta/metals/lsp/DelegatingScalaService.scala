@@ -207,8 +207,22 @@ class DelegatingScalaService(
       params: SemanticTokensParams
   ): CompletableFuture[SemanticTokens] = underlying.semanticTokensFull(params)
 
+  override def inlayHints(
+      params: InlayHintParams
+  ): CompletableFuture[util.List[InlayHint]] =
+    underlying.inlayHints(params)
+
+  override def inlayHintResolve(
+      inlayHint: InlayHint
+  ): CompletableFuture[InlayHint] =
+    underlying.inlayHintResolve(inlayHint)
+
   override def didChangeWorkspaceFolders(
       params: DidChangeWorkspaceFoldersParams
   ): CompletableFuture[Unit] = underlying.didChangeWorkspaceFolders(params)
+
+  override def didCancelWorkDoneProgress(
+      params: WorkDoneProgressCancelParams
+  ): Unit = underlying.didCancelWorkDoneProgress(params)
 
 }

@@ -6,7 +6,6 @@ import scala.meta.internal.metals.InitializationOptions
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.metals.ScalaVersions
 import scala.meta.internal.metals.UserConfiguration
-import scala.meta.internal.metals.clients.language.MetalsSlowTaskResult
 import scala.meta.internal.metals.codeactions.CreateNewSymbol
 import scala.meta.internal.metals.codeactions.ImportMissingSymbol
 import scala.meta.internal.metals.{BuildInfo => V}
@@ -261,10 +260,13 @@ abstract class BaseWorksheetLspSuite(
   test("cancel") {
     cleanWorkspace()
     val cancelled = Promise[Unit]()
-    client.slowTaskHandler = { _ =>
-      cancelled.trySuccess(())
-      Some(MetalsSlowTaskResult(cancel = true))
+    client.onWorkDoneProgressStart = { (message, cancelParams) =>
+      if (message.startsWith("Evaluating worksheet")) {
+        cancelled.trySuccess(())
+        server.fullServer.didCancelWorkDoneProgress(cancelParams)
+      }
     }
+
     for {
       _ <- initialize(
         s"""
@@ -277,7 +279,7 @@ abstract class BaseWorksheetLspSuite(
       )
       _ <- server.didOpen("a/src/main/scala/Main.worksheet.sc")
       _ <- cancelled.future
-      _ = client.slowTaskHandler = (_ => None)
+      _ = client.onWorkDoneProgressStart = (_, _) => {}
       _ <- server.didSave("a/src/main/scala/Main.worksheet.sc")(
         _.replace("Stream", "// Stream")
       )
@@ -400,7 +402,6 @@ abstract class BaseWorksheetLspSuite(
 
   test("update-classpath") {
     cleanWorkspace()
-    client.slowTaskHandler = _ => None
     for {
       _ <- initialize(
         s"""
@@ -855,7 +856,12 @@ abstract class BaseWorksheetLspSuite(
       _ = assertNoDiff(noCompletions, "")
     } yield ()
   }
-  if (ScalaVersions.isScala3Version(scalaVersion))
+
+  private val ignoreForScala3Versions = Set("3.4.0", "3.4.1")
+  if (
+    ScalaVersions
+      .isScala3Version(scalaVersion) && !ignoreForScala3Versions(scalaVersion)
+  )
     test("import-missing-symbol") {
       cleanWorkspace()
       val path = "a/src/main/scala/foo/Main.worksheet.sc"
@@ -870,6 +876,11 @@ abstract class BaseWorksheetLspSuite(
              |/metals.json
              |{"a": {"scalaVersion": "${scalaVersion}"}}
              |/$path
+             |//> using scala $scalaVersion
+             |
+             |// Some comment
+             |
+             |// Object comment
              |object A {
              |  val f = Future.successful(42)
              |}
@@ -881,10 +892,15 @@ abstract class BaseWorksheetLspSuite(
           server
             .assertCodeAction(
               path,
-              """|object A {
-                 |  val f = <<Future>>.successful(42)
-                 |}
-                 |""".stripMargin,
+              s"""|//> using scala $scalaVersion
+                  |
+                  |// Some comment
+                  |
+                  |// Object comment
+                  |object A {
+                  |  val f = <<Future>>.successful(42)
+                  |}
+                  |""".stripMargin,
               expectedActions,
               Nil,
             )
@@ -895,11 +911,16 @@ abstract class BaseWorksheetLspSuite(
         // Assert if indentation is correct. See `AutoImports.renderImport`
         _ = assertNoDiff(
           server.bufferContents(path),
-          """|import scala.concurrent.Future
-             |object A {
-             |  val f = Future.successful(42)
-             |}
-             |""".stripMargin,
+          s"""|//> using scala $scalaVersion
+              |
+              |// Some comment
+              |import scala.concurrent.Future
+              |
+              |// Object comment
+              |object A {
+              |  val f = Future.successful(42)
+              |}
+              |""".stripMargin,
         )
       } yield ()
     }

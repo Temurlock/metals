@@ -8,6 +8,7 @@ import scala.util.Success
 import scala.util.Try
 
 import scala.meta.internal.jdk.CollectionConverters._
+import scala.meta.internal.metals.JsonParser.XtensionSerializedAsOption
 import scala.meta.internal.mtags.Symbol
 import scala.meta.io.AbsolutePath
 import scala.meta.pc.PresentationCompilerConfig
@@ -41,9 +42,7 @@ case class UserConfiguration(
     bloopJvmProperties: Option[List[String]] = None,
     ammoniteJvmProperties: Option[List[String]] = None,
     superMethodLensesEnabled: Boolean = false,
-    showInferredType: Option[String] = None,
-    showImplicitArguments: Boolean = false,
-    showImplicitConversionsAndClasses: Boolean = false,
+    inlayHintsOptions: InlayHintsOptions = InlayHintsOptions(Map.empty),
     enableStripMarginOnTypeFormatting: Boolean = true,
     enableIndentOnPaste: Boolean = false,
     enableSemanticHighlighting: Boolean = true,
@@ -54,20 +53,20 @@ case class UserConfiguration(
     scalafixRulesDependencies: List[String] = Nil,
     customProjectRoot: Option[String] = None,
     verboseCompilation: Boolean = false,
+    automaticImportBuild: AutoImportBuildKind = AutoImportBuildKind.Off,
     scalaCliLauncher: Option[String] = None,
+    defaultBspToBuildTool: Boolean = false,
 ) {
+
+  def shouldAutoImportNewProject: Boolean =
+    automaticImportBuild != AutoImportBuildKind.Off
 
   def currentBloopVersion: String =
     bloopVersion.getOrElse(BuildInfo.bloopVersion)
 
   def usedJavaBinary(): Option[AbsolutePath] = JavaBinary.path(javaHome)
 
-  def areSyntheticsEnabled(): Boolean = {
-    val showInferredType = !this.showInferredType.contains(
-      "false"
-    ) && this.showInferredType.nonEmpty
-    showImplicitArguments || showInferredType || showImplicitConversionsAndClasses
-  }
+  def areSyntheticsEnabled(): Boolean = inlayHintsOptions.areSyntheticsEnabled
 
   def getCustomProjectRoot(workspace: AbsolutePath): Option[AbsolutePath] =
     customProjectRoot
@@ -226,7 +225,7 @@ object UserConfiguration {
            |""".stripMargin,
       ),
       UserConfigurationOption(
-        "show-inferred-type",
+        "inlay-hints.inferred-types.enable",
         "false",
         "false",
         "Should display type annotations for inferred types",
@@ -236,7 +235,7 @@ object UserConfiguration {
            |""".stripMargin,
       ),
       UserConfigurationOption(
-        "show-implicit-arguments",
+        "inlay-hints.implicit-arguments.enable",
         "false",
         "false",
         "Should display implicit parameter at usage sites",
@@ -246,12 +245,32 @@ object UserConfiguration {
            |""".stripMargin,
       ),
       UserConfigurationOption(
-        "show-implicit-conversions-and-classes",
+        "inlay-hints.implicit-conversions.enable",
         "false",
         "false",
         "Should display implicit conversion at usage sites",
         """|When this option is enabled, each place where an implicit method or class is used has it 
            |displayed either as additional decorations if they are supported by the editor or 
+           |shown in the hover.
+           |""".stripMargin,
+      ),
+      UserConfigurationOption(
+        "inlay-hints.type-parameters.enable",
+        "false",
+        "false",
+        "Should display type annotations for type parameters",
+        """|When this option is enabled, each place when a type parameter is applied has it
+           |displayed either as additional decorations if they are supported by the editor or
+           |shown in the hover.
+           |""".stripMargin,
+      ),
+      UserConfigurationOption(
+        "inlay-hints.hints-in-pattern-match.enable",
+        "false",
+        "false",
+        "Should display type annotations in pattern matches",
+        """|When this option is enabled, each place when a type is inferred in a pattern match has it
+           |displayed either as additional decorations if they are supported by the editor or
            |shown in the hover.
            |""".stripMargin,
       ),
@@ -338,6 +357,24 @@ object UserConfiguration {
         """|If a build server supports it (for example Bloop or Scala CLI), setting it to true
            |will make the logs contain all the possible debugging information including
            |about incremental compilation in Zinc.""".stripMargin,
+      ),
+      UserConfigurationOption(
+        "auto-import-build",
+        "off",
+        "all",
+        "Import build when changes detected without prompting",
+        """|Automatically import builds rather than prompting the user to choose. "initial" will 
+           |only automatically import a build when a project is first opened, "all" will automate 
+           |build imports after subsequent changes as well.""".stripMargin,
+      ),
+      UserConfigurationOption(
+        "default-bsp-to-build-tool",
+        "false",
+        "true",
+        "Default to using build tool as your build server.",
+        """|If your build tool can also serve as a build server,
+           |default to using it instead of Bloop.
+           |""".stripMargin,
       ),
     )
 
@@ -473,6 +510,31 @@ object UserConfiguration {
         },
       )
 
+    def getInlayHints =
+      getKey(
+        "inlay-hints",
+        json,
+        { value =>
+          Try {
+            for {
+              entry <- value.getAsJsonObject.entrySet().asScala.iterator
+              enable <- entry
+                .getValue()
+                .getAsJsonObject()
+                .getBooleanOption("enable")
+            } yield {
+              entry.getKey -> enable
+            }
+          }.fold(
+            _ => {
+              errors += s"json error: key 'inlayHints' should have be object with Boolean values but obtained $value"
+              None
+            },
+            entries => Some(entries.toMap),
+          ).filter(_.nonEmpty)
+        },
+      )
+
     val javaHome =
       getStringKey("java-home")
     val scalafmtConfigPath =
@@ -509,12 +571,35 @@ object UserConfiguration {
     val bloopJvmProperties = getStringListKey("bloop-jvm-properties")
     val superMethodLensesEnabled =
       getBooleanKey("super-method-lenses-enabled").getOrElse(false)
-    val showInferredType =
-      getStringKey("show-inferred-type")
-    val showImplicitArguments =
-      getBooleanKey("show-implicit-arguments").getOrElse(false)
-    val showImplicitConversionsAndClasses =
-      getBooleanKey("show-implicit-conversions-and-classes").getOrElse(false)
+
+    // For old inlay hints settings
+    def inlayHintsOptionsFallback: Map[InlayHintsOption, Boolean] = {
+      val showInferredType =
+        getStringKey("show-inferred-type")
+      val inferredType = showInferredType.contains("true") ||
+        showInferredType.contains("minimal")
+      val typeParameters = showInferredType.contains("true")
+      val implicitArguments =
+        getBooleanKey("show-implicit-arguments").getOrElse(false)
+      val implicitConversionsAndClasses =
+        getBooleanKey("show-implicit-conversions-and-classes")
+          .getOrElse(false)
+      Map(
+        InlayHintsOption.InferredType -> inferredType,
+        InlayHintsOption.TypeParameters -> typeParameters,
+        InlayHintsOption.ImplicitArguments -> implicitArguments,
+        InlayHintsOption.ImplicitConversions -> implicitConversionsAndClasses,
+      )
+    }
+    val inlayHintsOptions =
+      InlayHintsOptions(getInlayHints match {
+        case Some(options) =>
+          options.collect { case (InlayHintsOption(key), value) =>
+            key -> value
+          }
+        case _ => inlayHintsOptionsFallback
+      })
+
     val enableStripMarginOnTypeFormatting =
       getBooleanKey("enable-strip-margin-on-type-formatting").getOrElse(true)
     val enableIndentOnPaste =
@@ -553,6 +638,17 @@ object UserConfiguration {
     val verboseCompilation =
       getBooleanKey("verbose-compilation").getOrElse(false)
 
+    val autoImportBuilds =
+      getStringKey("auto-import-builds").map(_.trim().toLowerCase()) match {
+        case Some("initial") => AutoImportBuildKind.Initial
+        case Some("all") => AutoImportBuildKind.All
+        case _ => AutoImportBuildKind.Off
+      }
+
+    val scalaCliLauncher = getStringKey("scala-cli-launcher")
+    val defaultBspToBuildTool =
+      getBooleanKey("default-bsp-to-build-tool").getOrElse(false)
+
     if (errors.isEmpty) {
       Right(
         UserConfiguration(
@@ -571,9 +667,7 @@ object UserConfiguration {
           bloopJvmProperties,
           ammoniteProperties,
           superMethodLensesEnabled,
-          showInferredType,
-          showImplicitArguments,
-          showImplicitConversionsAndClasses,
+          inlayHintsOptions,
           enableStripMarginOnTypeFormatting,
           enableIndentOnPaste,
           enableSemanticHighlighting,
@@ -584,6 +678,9 @@ object UserConfiguration {
           scalafixRulesDependencies,
           customProjectRoot,
           verboseCompilation,
+          autoImportBuilds,
+          scalaCliLauncher,
+          defaultBspToBuildTool,
         )
       )
     } else {
@@ -602,4 +699,11 @@ sealed trait TestUserInterfaceKind
 object TestUserInterfaceKind {
   object CodeLenses extends TestUserInterfaceKind
   object TestExplorer extends TestUserInterfaceKind
+}
+
+sealed trait AutoImportBuildKind
+object AutoImportBuildKind {
+  object Off extends AutoImportBuildKind
+  object Initial extends AutoImportBuildKind
+  object All extends AutoImportBuildKind
 }

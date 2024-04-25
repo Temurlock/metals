@@ -1,11 +1,10 @@
 package scala.meta.internal.metals
 
-import java.nio.file.Path
-
 import scala.collection.mutable.ListBuffer
 
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.mtags.URIEncoderDecoder
+import scala.meta.io.AbsolutePath
 
 import ch.epfl.scala.bsp4j.BuildTarget
 import ch.epfl.scala.bsp4j.BuildTargetIdentifier
@@ -130,13 +129,27 @@ class BuildTargetInfo(buildTargets: BuildTargets) {
       )
     }
 
-    val scalaClassPath = scalaInfo.map(_.fullClasspath).getOrElse(Nil)
-    val javaClassPath = javaInfo.map(_.fullClasspath).getOrElse(Nil)
+    val scalaClassPath =
+      scalaInfo.flatMap(_.classpath).getOrElse(Nil).map(_.toAbsolutePath)
+    val javaClassPath =
+      javaInfo.flatMap(_.classpath).getOrElse(Nil).map(_.toAbsolutePath)
     if (scalaClassPath == javaClassPath)
-      output ++= getSection("Classpath", getClassPath(scalaClassPath))
+      if (scalaClassPath.isEmpty)
+        List("<unresolved>")
+      else
+        output ++= getSection(
+          "Classpath",
+          getClassPath(scalaClassPath, targetId),
+        )
     else {
-      output ++= getSection("Java Classpath", getClassPath(javaClassPath))
-      output ++= getSection("Scala Classpath", getClassPath(scalaClassPath))
+      output ++= getSection(
+        "Java Classpath",
+        getClassPath(javaClassPath, targetId),
+      )
+      output ++= getSection(
+        "Scala Classpath",
+        getClassPath(scalaClassPath, targetId),
+      )
     }
     output += ""
     output.mkString(System.lineSeparator())
@@ -158,23 +171,20 @@ class BuildTargetInfo(buildTargets: BuildTargets) {
   ): String =
     if (hasCapability) capability else s"$capability <- NOT SUPPORTED"
 
-  private def jarHasSource(jarName: String): Boolean = {
-    val sourceJarName = jarName.replace(".jar", "-sources.jar")
-    buildTargets
-      .sourceJarFile(sourceJarName)
-      .exists(_.toFile.exists())
-  }
-
   private def getSingleClassPathInfo(
-      path: Path,
-      shortPath: Path,
+      path: AbsolutePath,
+      filename: String,
       maxFilenameSize: Int,
+      buildTargetId: BuildTargetIdentifier,
   ): String = {
-    val filename = shortPath.toString()
     val padding = " " * (maxFilenameSize - filename.size)
     val status = if (path.toFile.exists) {
       val blankWarning = " " * 9
-      if (path.toFile().isDirectory() || jarHasSource(filename))
+      if (
+        path.isDirectory || buildTargets
+          .sourceJarFor(buildTargetId, path)
+          .nonEmpty
+      )
         blankWarning
       else
         "NO SOURCE"
@@ -184,13 +194,14 @@ class BuildTargetInfo(buildTargets: BuildTargets) {
   }
 
   private def getClassPath(
-      classPath: List[Path]
+      classPath: List[AbsolutePath],
+      buildTargetId: BuildTargetIdentifier,
   ): List[String] = {
-    def shortenPath(path: Path): Path = {
+    def shortenPath(path: AbsolutePath): String = {
       if (path.toFile.isFile)
-        path.getFileName()
+        path.filename
       else
-        path
+        path.toString()
     }
     if (classPath.nonEmpty) {
       val maxFilenameSize =
@@ -200,6 +211,7 @@ class BuildTargetInfo(buildTargets: BuildTargets) {
           path,
           shortenPath(path),
           maxFilenameSize,
+          buildTargetId,
         )
       )
     } else

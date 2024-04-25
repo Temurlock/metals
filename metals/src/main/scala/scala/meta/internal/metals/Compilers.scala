@@ -11,21 +11,17 @@ import scala.annotation.tailrec
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.ExecutionContextExecutorService
 import scala.concurrent.Future
-import scala.util.Try
 import scala.util.control.NonFatal
 
 import scala.meta.inputs.Input
 import scala.meta.inputs.Position
-import scala.meta.internal.decorations.DecorationOptions
 import scala.meta.internal.metals.CompilerOffsetParamsUtils
 import scala.meta.internal.metals.CompilerRangeParamsUtils
 import scala.meta.internal.metals.Compilers.PresentationCompilerKey
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.parsing.Trees
-import scala.meta.internal.pc.EmptySymbolSearch
-import scala.meta.internal.pc.JavaPresentationCompiler
 import scala.meta.internal.pc.LogMessages
-import scala.meta.internal.pc.ScalaPresentationCompiler
+import scala.meta.internal.pc.PcSymbolInformation
 import scala.meta.internal.worksheets.WorksheetPcData
 import scala.meta.internal.worksheets.WorksheetProvider
 import scala.meta.io.AbsolutePath
@@ -35,7 +31,7 @@ import scala.meta.pc.HoverSignature
 import scala.meta.pc.OffsetParams
 import scala.meta.pc.PresentationCompiler
 import scala.meta.pc.SymbolSearch
-import scala.meta.pc.SyntheticDecoration
+import scala.meta.pc.SyntheticDecorationsParams
 
 import ch.epfl.scala.bsp4j.BuildTargetIdentifier
 import ch.epfl.scala.bsp4j.CompileReport
@@ -46,6 +42,9 @@ import org.eclipse.lsp4j.CompletionParams
 import org.eclipse.lsp4j.Diagnostic
 import org.eclipse.lsp4j.DocumentHighlight
 import org.eclipse.lsp4j.InitializeParams
+import org.eclipse.lsp4j.InlayHint
+import org.eclipse.lsp4j.InlayHintKind
+import org.eclipse.lsp4j.InlayHintParams
 import org.eclipse.lsp4j.RenameParams
 import org.eclipse.lsp4j.SelectionRange
 import org.eclipse.lsp4j.SelectionRangeParams
@@ -73,7 +72,7 @@ class Compilers(
     buffers: Buffers,
     search: SymbolSearch,
     embedded: Embedded,
-    statusBar: StatusBar,
+    workDoneProgress: WorkDoneProgress,
     sh: ScheduledExecutorService,
     initializeParams: InitializeParams,
     excludedPackages: () => ExcludedPackagesHandler,
@@ -84,18 +83,35 @@ class Compilers(
     worksheetProvider: WorksheetProvider,
 )(implicit ec: ExecutionContextExecutorService, rc: ReportContext)
     extends Cancelable {
-  val plugins = new CompilerPlugins()
+
+  val compilerConfiguration = new CompilerConfiguration(
+    workspace,
+    config,
+    userConfig,
+    buildTargets,
+    buffers,
+    embedded,
+    sh,
+    initializeParams,
+    excludedPackages,
+    trees,
+    mtagsResolver,
+    sourceMapper,
+  )
+
+  import compilerConfiguration._
 
   // Not a TrieMap because we want to avoid loading duplicate compilers for the same build target.
   // Not a `j.u.c.ConcurrentHashMap` because it can deadlock in `computeIfAbsent` when the absent
   // function is expensive, which is the case here.
-  val jcache: ju.Map[PresentationCompilerKey, PresentationCompiler] =
+  val jcache: ju.Map[PresentationCompilerKey, MtagsPresentationCompiler] =
     Collections.synchronizedMap(
-      new java.util.HashMap[PresentationCompilerKey, PresentationCompiler]
+      new java.util.HashMap[PresentationCompilerKey, MtagsPresentationCompiler]
     )
-  private val jworksheetsCache: ju.Map[AbsolutePath, PresentationCompiler] =
+  private val jworksheetsCache
+      : ju.Map[AbsolutePath, MtagsPresentationCompiler] =
     Collections.synchronizedMap(
-      new java.util.HashMap[AbsolutePath, PresentationCompiler]
+      new java.util.HashMap[AbsolutePath, MtagsPresentationCompiler]
     )
 
   private val worksheetsDigests = new TrieMap[AbsolutePath, String]()
@@ -104,77 +120,40 @@ class Compilers(
   private def buildTargetPCFromCache(
       id: BuildTargetIdentifier
   ): Option[PresentationCompiler] =
-    cache.get(PresentationCompilerKey.BuildTarget(id)).filter(_ != null)
+    cache.get(PresentationCompilerKey.ScalaBuildTarget(id)).collect {
+      case lazyPc if lazyPc != null => lazyPc.await
+    }
 
   private val worksheetsCache = jworksheetsCache.asScala
 
-  private def createStandaloneCompiler(
-      scalaVersion: String,
-      classpath: Seq[Path],
-      standaloneSearch: SymbolSearch,
-      name: String,
-      path: AbsolutePath,
-  ): PresentationCompiler = {
-    val mtags =
-      mtagsResolver.resolve(scalaVersion).getOrElse(MtagsBinaries.BuildIn)
-
-    val tmpDirectory = workspace.resolve(Directories.tmp)
-    if (!path.toNIO.startsWith(tmpDirectory.toNIO))
-      scribe.info(
-        s"no build target found for $path. Using presentation compiler with project's scala-library version: ${mtags.scalaVersion}"
-      )
-    newCompiler(
-      mtags,
-      List.empty,
-      classpath ++ Embedded.scalaLibrary(scalaVersion),
-      standaloneSearch,
-      name,
-    )
-  }
-
   // The "fallback" compiler is used for source files that don't belong to a build target.
-  def fallbackCompiler(path: AbsolutePath): PresentationCompiler = {
-    jcache.compute(
-      PresentationCompilerKey.Default,
-      (_, value) => {
-        val scalaVersion =
-          scalaVersionSelector.fallbackScalaVersion(isAmmonite = false)
-        val existingPc = Option(value).flatMap { pc =>
-          if (pc.scalaVersion == scalaVersion) {
-            Some(pc)
-          } else {
-            pc.shutdown()
-            None
+  private def fallbackCompiler: PresentationCompiler = {
+    jcache
+      .compute(
+        PresentationCompilerKey.Default,
+        (_, value) => {
+          val scalaVersion =
+            scalaVersionSelector.fallbackScalaVersion(isAmmonite = false)
+
+          Option(value) match {
+            case Some(lazyPc) =>
+              val presentationCompiler = lazyPc.await
+              if (presentationCompiler.scalaVersion() == scalaVersion) {
+                lazyPc
+              } else {
+                presentationCompiler.shutdown()
+                StandaloneCompiler(scalaVersion, search, Nil)
+              }
+            case None =>
+              StandaloneCompiler(scalaVersion, search, Nil)
           }
-        }
-        existingPc match {
-          case Some(pc) => pc
-          case None =>
-            createStandaloneCompiler(
-              scalaVersion,
-              List.empty,
-              Try(
-                StandaloneSymbolSearch(
-                  scalaVersion,
-                  workspace,
-                  buffers,
-                  excludedPackages,
-                  userConfig,
-                  trees,
-                  buildTargets,
-                  saveSymbolFileToDisk = !config.isVirtualDocumentSupported(),
-                  sourceMapper,
-                )
-              ).getOrElse(EmptySymbolSearch),
-              "default",
-              path,
-            )
-        }
-      },
-    )
+        },
+      )
+      .await
   }
 
-  def loadedPresentationCompilerCount(): Int = cache.values.count(_.isLoaded())
+  def loadedPresentationCompilerCount(): Int =
+    cache.values.count(_.await.isLoaded())
 
   override def cancel(): Unit = {
     Cancelable.cancelEach(cache.values)(_.shutdown())
@@ -202,22 +181,25 @@ class Compilers(
           .distinct
         targets.foreach { target =>
           loadCompiler(target).foreach { pc =>
-            pc.hover(
-              CompilerOffsetParams(
-                Paths.get("Main.scala").toUri(),
-                "object Ma\n",
-                "object Ma".length(),
+            pc
+              .hover(
+                CompilerOffsetParams(
+                  Paths.get("Main.scala").toUri(),
+                  "object Ma\n",
+                  "object Ma".length(),
+                )
               )
-            ).thenApply(_.map(_.toLsp()))
+              .thenApply(_.map(_.toLsp()))
           }
         }
       }
     }
 
   def didClose(path: AbsolutePath): Unit = {
-    loadCompiler(path).foreach { pc =>
-      pc.didClose(path.toNIO.toUri())
-    }
+    loadCompiler(path)
+      .map { pc =>
+        pc.didClose(path.toNIO.toUri())
+      }
   }
 
   def didChange(path: AbsolutePath): Future[List[Diagnostic]] = {
@@ -229,7 +211,9 @@ class Compilers(
       .map { pc =>
         val inputAndAdjust =
           if (
-            path.isWorksheet && ScalaVersions.isScala3Version(pc.scalaVersion())
+            path.isWorksheet && ScalaVersions.isScala3Version(
+              pc.scalaVersion()
+            )
           ) {
             WorksheetProvider.worksheetScala3AdjustmentsForPC(originInput)
           } else {
@@ -250,6 +234,7 @@ class Compilers(
               .asScala
         } yield {
           ds.asScala.map(adjust.adjustDiagnostic).toList
+
         }
       }
       .getOrElse(Future.successful(Nil))
@@ -278,18 +263,6 @@ class Compilers(
       compiler <- buildTargetPCFromCache(new BuildTargetIdentifier(data.target))
     } yield compiler.completionItemResolve(item, data.symbol).asScala
   }.getOrElse(Future.successful(item))
-
-  def log: List[String] =
-    if (config.initialConfig.compilers.debug) {
-      List(
-        "-Ypresentation-debug",
-        "-Ypresentation-verbose",
-        "-Ypresentation-log",
-        workspace.resolve(Directories.pc).toString(),
-      )
-    } else {
-      Nil
-    }
 
   /**
    * Calculates completions for a expression evaluator at breakpointPosition
@@ -563,54 +536,72 @@ class Compilers(
 
   }
 
-  def syntheticDecorations(
-      path: AbsolutePath,
+  def inlayHints(
+      params: InlayHintParams,
       token: CancelToken,
-  ): Future[ju.List[DecorationOptions]] = {
-    loadCompiler(path)
-      .map { compiler =>
-        val (input, _, adjust) =
-          sourceAdjustments(
-            path.toNIO.toUri().toString(),
-            compiler.scalaVersion(),
+  ): Future[ju.List[InlayHint]] = {
+    withPCAndAdjustLsp(params) { (pc, pos, adjust) =>
+      def inlayHintsFallback(
+          params: SyntheticDecorationsParams
+      ): Future[ju.List[InlayHint]] = {
+        pc.syntheticDecorations(params)
+          .asScala
+          .map(
+            _.map { d =>
+              val hint = new InlayHint()
+              hint.setPosition(d.range().getStart())
+              hint.setLabel(d.label())
+              val kind =
+                if (d.kind() <= 2) InlayHintKind.Type
+                else InlayHintKind.Parameter
+              hint.setKind(kind)
+              hint.setData(Array(""))
+              hint
+            }
           )
+      }
 
-        def adjustDecorations(
-            decorations: ju.List[SyntheticDecoration]
-        ): ju.List[DecorationOptions] = {
-          val withCorrectStart = decorations.asScala.dropWhile { d =>
-            val adjusted = adjust
-              .adjustPos(d.range().getStart(), adjustToZero = false)
+      def adjustInlayHints(
+          inlayHints: ju.List[InlayHint]
+      ): ju.List[InlayHint] = {
+        inlayHints.asScala
+          .dropWhile { hint =>
+            val adjusted =
+              adjust.adjustPos(hint.getPosition(), adjustToZero = false)
             adjusted.getLine() < 0 || adjusted.getCharacter() < 0
           }
-          withCorrectStart.map { decoration =>
-            DecorationOptions(
-              decoration.label(),
-              adjust.adjustRange(decoration.range()),
-            )
-          }.asJava
-        }
-        val vFile =
-          CompilerVirtualFileParams(path.toNIO.toUri(), input.text, token)
-
-        val pcParams = CompilerSyntheticDecorationsParams(
-          vFile,
-          typeParameters = userConfig().showInferredType.contains("true"),
-          inferredTypes = userConfig().showInferredType.contains("minimal") ||
-            userConfig().showInferredType.contains("true"),
-          implicitParameters = userConfig().showImplicitArguments,
-          implicitConversions = userConfig().showImplicitConversionsAndClasses,
-        )
-        compiler
-          .syntheticDecorations(pcParams)
-          .asScala
-          .map { decorations =>
-            adjustDecorations(decorations)
+          .map { hint =>
+            hint.setPosition(adjust.adjustPos(hint.getPosition()))
+            hint
           }
-
+          .asJava
       }
-      .getOrElse(Future.successful(Nil.asJava))
 
+      val rangeParams =
+        CompilerRangeParamsUtils.fromPos(pos, token)
+      val options = userConfig().inlayHintsOptions
+      val pcParams = CompilerInlayHintsParams(
+        rangeParams,
+        inferredTypes = options.inferredType,
+        implicitParameters = options.implicitArguments,
+        implicitConversions = options.implicitConversions,
+        typeParameters = options.typeParameters,
+        hintsInPatternMatch = options.hintsInPatternMatch,
+      )
+
+      pc
+        .inlayHints(pcParams)
+        .asScala
+        .flatMap { hints =>
+          if (hints.isEmpty) {
+            inlayHintsFallback(pcParams.toSyntheticDecorationsParams)
+              .map(adjustInlayHints)
+          } else {
+            Future.successful(adjustInlayHints(hints))
+          }
+        }
+    }
+      .getOrElse(Future.successful(Nil.asJava))
   }
 
   def completions(
@@ -735,8 +726,9 @@ class Compilers(
       token: CancelToken,
   ): Future[Option[HoverSignature]] = {
     withPCAndAdjustLsp(params) { (pc, pos, adjust) =>
-      pc.hover(CompilerRangeParamsUtils.offsetOrRange(pos, token))
-        .asScala
+      pc.hover(
+        CompilerRangeParamsUtils.offsetOrRange(pos, token)
+      ).asScala
         .map(_.asScala.map { hover => adjust.adjustHoverResp(hover) })
     }
   }.getOrElse(Future.successful(None))
@@ -784,6 +776,18 @@ class Compilers(
     definition(params = params, token = token, findTypeDef = true)
   }
 
+  def info(
+      path: AbsolutePath,
+      symbol: String,
+  ): Future[Option[PcSymbolInformation]] = {
+    loadCompiler(path, forceScala = true)
+      .map(
+        _.info(symbol).asScala
+          .map(_.asScala.map(PcSymbolInformation.from))
+      )
+      .getOrElse(Future(None))
+  }
+
   private def definition(
       params: TextDocumentPositionParams,
       token: CancelToken,
@@ -816,6 +820,7 @@ class Compilers(
             c.symbol(),
             definitionPath,
             None,
+            c.symbol(),
           )
         }
     }.getOrElse(Future.successful(DefinitionResult.empty))
@@ -839,8 +844,28 @@ class Compilers(
     }.getOrElse(Future.successful(Nil.asJava))
   }
 
+  def getTasty(
+      buildTargetId: BuildTargetIdentifier,
+      path: AbsolutePath,
+  ): Option[Future[String]] = {
+    loadCompiler(buildTargetId).map(
+      _.getTasty(
+        path.toURI,
+        config.isHttpEnabled(),
+      ).asScala
+    )
+  }
+
+  /**
+   * Gets presentation compiler for a file.
+   * @param path for which presentation compiler should be loaded,
+   *             resolves build target based on this file
+   * @param forceScala if should use Scala pc for `.java` files that are in a Scala build target,
+   *                   useful when Scala pc can handle Java files and Java pc implementation of a feature is missing
+   */
   def loadCompiler(
-      path: AbsolutePath
+      path: AbsolutePath,
+      forceScala: Boolean = false,
   ): Option[PresentationCompiler] = {
 
     def fromBuildTarget: Option[PresentationCompiler] = {
@@ -848,10 +873,20 @@ class Compilers(
         .inverseSources(path)
 
       target match {
-        case None => Some(fallbackCompiler(path))
+        case None =>
+          val tmpDirectory = workspace.resolve(Directories.tmp)
+          val scalaVersion =
+            scalaVersionSelector.fallbackScalaVersion(isAmmonite = false)
+          if (!path.toNIO.startsWith(tmpDirectory.toNIO))
+            scribe.info(
+              s"no build target found for $path. Using presentation compiler with project's scala-library version: ${scalaVersion}"
+            )
+          Some(fallbackCompiler)
         case Some(value) =>
           if (path.isScalaFilename) loadCompiler(value)
-          else if (path.isJavaFilename) loadJavaCompiler(value)
+          else if (path.isJavaFilename && forceScala)
+            loadCompiler(value).orElse(Some(loadJavaCompiler(value)))
+          else if (path.isJavaFilename) Some(loadJavaCompiler(value))
           else None
       }
     }
@@ -867,7 +902,7 @@ class Compilers(
   ): Option[PresentationCompiler] = {
     worksheetProvider.getWorksheetPCData(path).flatMap { data =>
       maybeRestartWorksheetPresentationCompiler(path, data)
-      worksheetsCache.get(path)
+      worksheetsCache.get(path).map(_.await)
     }
   }
 
@@ -905,26 +940,15 @@ class Compilers(
     } yield {
       jworksheetsCache.put(
         path,
-        statusBar.trackBlockingTask(
+        workDoneProgress.trackBlocking(
           s"${config.icons.sync}Loading worksheet presentation compiler"
         ) {
-          val worksheetSearch = new StandaloneSymbolSearch(
-            workspace,
-            classpath.map(AbsolutePath(_)),
-            sources.map(AbsolutePath(_)),
-            buffers,
-            excludedPackages,
-            trees,
-            buildTargets,
-            saveSymbolFileToDisk = !config.isVirtualDocumentSupported(),
-            sourceMapper,
-            workspaceFallback = Some(search),
-          )
-          newCompiler(
+          ScalaLazyCompiler.forWorksheet(
             scalaTarget,
             mtags,
             classpath,
-            worksheetSearch,
+            sources,
+            search,
           )
         },
       )
@@ -935,82 +959,62 @@ class Compilers(
         path, {
           val scalaVersion =
             scalaVersionSelector.fallbackScalaVersion(isAmmonite = false)
-          createStandaloneCompiler(
+          StandaloneCompiler(
             scalaVersion,
             classpath,
-            StandaloneSymbolSearch(
-              scalaVersion,
-              workspace,
-              buffers,
-              sources,
-              classpath,
-              excludedPackages,
-              userConfig,
-              trees,
-              buildTargets,
-              saveSymbolFileToDisk = !config.isVirtualDocumentSupported(),
-              sourceMapper,
-            ),
-            path.toString(),
-            path,
+            sources,
+            Some(search),
           )
         },
       )
     }
   }
 
-  def loadCompiler(
+  private def loadJavaCompiler(
+      targetId: BuildTargetIdentifier
+  ): PresentationCompiler = {
+    jcache
+      .computeIfAbsent(
+        PresentationCompilerKey.JavaBuildTarget(targetId),
+        { _ =>
+          workDoneProgress.trackBlocking(
+            s"${config.icons.sync}Loading presentation compiler"
+          ) {
+            JavaLazyCompiler(targetId, search)
+          }
+        },
+      )
+      .await
+  }
+
+  private def loadCompiler(
       targetId: BuildTargetIdentifier
   ): Option[PresentationCompiler] = {
     val target = buildTargets.scalaTarget(targetId)
     target.flatMap(loadCompilerForTarget)
   }
 
-  def loadJavaCompiler(
-      targetId: BuildTargetIdentifier
-  ): Option[PresentationCompiler] = {
-    val targetClasspath = buildTargets.targetClasspath(targetId)
-    targetClasspath.flatMap(classpath =>
-      loadJavaCompilerForTarget(targetId.getUri, classpath)
-    )
-  }
-
-  def loadCompilerForTarget(
+  private def loadCompilerForTarget(
       scalaTarget: ScalaTarget
   ): Option[PresentationCompiler] = {
     val scalaVersion = scalaTarget.scalaVersion
     mtagsResolver.resolve(scalaVersion) match {
       case Some(mtags) =>
         val out = jcache.computeIfAbsent(
-          PresentationCompilerKey.BuildTarget(scalaTarget.info.getId),
+          PresentationCompilerKey.ScalaBuildTarget(scalaTarget.info.getId),
           { _ =>
-            statusBar.trackBlockingTask(
+            workDoneProgress.trackBlocking(
               s"${config.icons.sync}Loading presentation compiler"
             ) {
-              newCompiler(scalaTarget, mtags, search)
+              ScalaLazyCompiler(scalaTarget, mtags, search)
             }
           },
         )
-        Option(out)
+        Option(out.await)
       case None =>
         scribe.warn(s"unsupported Scala ${scalaTarget.scalaVersion}")
         None
     }
-  }
-
-  def loadJavaCompilerForTarget(
-      targetUri: String,
-      classpath: List[String],
-  ): Option[PresentationCompiler] = {
-    val pc = JavaPresentationCompiler()
-    Some(
-      configure(pc, search)
-        .newInstance(
-          targetUri,
-          classpath.toAbsoluteClasspath.map(_.toNIO).toSeq.asJava,
-          log.asJava,
-        )
-    )
   }
 
   private def withPCAndAdjustLsp[T](
@@ -1031,6 +1035,20 @@ class Compilers(
 
   private def withPCAndAdjustLsp[T](
       params: TextDocumentPositionParams
+  )(fn: (PresentationCompiler, Position, AdjustLspData) => T): Option[T] = {
+    val path = params.getTextDocument.getUri.toAbsolutePath
+    loadCompiler(path).flatMap { compiler =>
+      val (input, pos, adjust) =
+        sourceAdjustments(
+          params,
+          compiler.scalaVersion(),
+        )
+      pos.toMeta(input).map(metaPos => fn(compiler, metaPos, adjust))
+    }
+  }
+
+  private def withPCAndAdjustLsp[T](
+      params: InlayHintParams
   )(fn: (PresentationCompiler, Position, AdjustLspData) => T): Option[T] = {
     val path = params.getTextDocument.getUri.toAbsolutePath
     loadCompiler(path).flatMap { compiler =>
@@ -1112,6 +1130,20 @@ class Compilers(
   }
 
   private def sourceAdjustments(
+      params: InlayHintParams,
+      scalaVersion: String,
+  ): (Input.VirtualFile, LspRange, AdjustLspData) = {
+    val (input, adjustRequest, adjustResponse) = sourceAdjustments(
+      params.getTextDocument.getUri(),
+      scalaVersion,
+    )
+    val start = params.getRange.getStart()
+    val end = params.getRange.getEnd()
+    val newRange = new LspRange(adjustRequest(start), adjustRequest(end))
+    (input, newRange, adjustResponse)
+  }
+
+  private def sourceAdjustments(
       params: HoverExtParams,
       scalaVersion: String,
   ): (Input.VirtualFile, LspRange, AdjustLspData) = {
@@ -1131,77 +1163,6 @@ class Compilers(
   ): (Input.VirtualFile, LspPosition => LspPosition, AdjustLspData) = {
     val path = uri.toAbsolutePath
     sourceMapper.pcMapping(path, scalaVersion)
-  }
-
-  private def configure(
-      pc: PresentationCompiler,
-      search: SymbolSearch,
-  ): PresentationCompiler =
-    pc.withSearch(search)
-      .withExecutorService(ec)
-      .withWorkspace(workspace.toNIO)
-      .withScheduledExecutorService(sh)
-      .withReportsLoggerLevel(MetalsServerConfig.default.loglevel)
-      .withConfiguration {
-        val options =
-          InitializationOptions.from(initializeParams).compilerOptions
-        config.initialConfig.compilers
-          .update(options)
-          .copy(
-            _symbolPrefixes = userConfig().symbolPrefixes,
-            isCompletionSnippetsEnabled =
-              initializeParams.supportsCompletionSnippets,
-            _isStripMarginOnTypeFormattingEnabled =
-              () => userConfig().enableStripMarginOnTypeFormatting,
-          )
-      }
-
-  def newCompiler(
-      target: ScalaTarget,
-      mtags: MtagsBinaries,
-      search: SymbolSearch,
-  ): PresentationCompiler = {
-    val classpath =
-      target.scalac.classpath.toAbsoluteClasspath.map(_.toNIO).toSeq
-    newCompiler(target, mtags, classpath, search)
-  }
-
-  def newCompiler(
-      target: ScalaTarget,
-      mtags: MtagsBinaries,
-      classpath: Seq[Path],
-      search: SymbolSearch,
-  ): PresentationCompiler = {
-    newCompiler(
-      mtags,
-      target.scalac.getOptions().asScala.toSeq,
-      classpath,
-      search,
-      target.scalac.getTarget.getUri,
-    ).withBuildTargetName(target.displayName)
-  }
-
-  def newCompiler(
-      mtags: MtagsBinaries,
-      options: Seq[String],
-      classpath: Seq[Path],
-      search: SymbolSearch,
-      name: String,
-  ): PresentationCompiler = {
-    val pc: PresentationCompiler =
-      mtags match {
-        case MtagsBinaries.BuildIn => new ScalaPresentationCompiler()
-        case artifacts: MtagsBinaries.Artifacts =>
-          embedded.presentationCompiler(artifacts, classpath)
-      }
-
-    val filteredOptions = plugins.filterSupportedOptions(options)
-    configure(pc, search)
-      .newInstance(
-        name,
-        classpath.asJava,
-        (log ++ filteredOptions).asJava,
-      )
   }
 
   private def toDebugCompletionType(
@@ -1287,7 +1248,9 @@ object Compilers {
 
   sealed trait PresentationCompilerKey
   object PresentationCompilerKey {
-    final case class BuildTarget(id: BuildTargetIdentifier)
+    final case class ScalaBuildTarget(id: BuildTargetIdentifier)
+        extends PresentationCompilerKey
+    final case class JavaBuildTarget(id: BuildTargetIdentifier)
         extends PresentationCompilerKey
     case object Default extends PresentationCompilerKey
   }

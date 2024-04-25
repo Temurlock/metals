@@ -1,9 +1,8 @@
 package scala.meta.internal.metals
 
-import java.nio.file.Path
-
 import scala.meta.Dialect
 import scala.meta.dialects._
+import scala.meta.internal.builds.BazelBuildTool
 import scala.meta.internal.builds.MillBuildTool
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.semver.SemVer
@@ -23,7 +22,7 @@ case class ScalaTarget(
     autoImports: Option[Seq[String]],
     sbtVersion: Option[String],
     bspConnection: Option[BuildServerConnection],
-) {
+) extends JvmTarget {
 
   def isSbt = sbtVersion.isDefined
 
@@ -74,6 +73,7 @@ case class ScalaTarget(
    */
   private def semanticDbEnabledAlternatively = bspConnection.exists {
     buildServer =>
+      buildServer.name == BazelBuildTool.bspName ||
       buildServer.name == MillBuildTool.bspName &&
       SemVer.isCompatibleVersion(
         MillBuildTool.scalaSemanticDbSupport,
@@ -83,6 +83,11 @@ case class ScalaTarget(
 
   def isAmmonite: Boolean = displayName.endsWith(".sc")
 
+  def semanticdbFilesPresent(): Boolean = targetroot
+    .resolve(Directories.semanticdb)
+    .listRecursive
+    .exists(_.isSemanticdb)
+
   def isSemanticdbEnabled: Boolean =
     scalac.isSemanticdbEnabled(scalaVersion) ||
       semanticDbEnabledAlternatively || isAmmonite
@@ -90,11 +95,21 @@ case class ScalaTarget(
   def isSourcerootDeclared: Boolean =
     scalac.isSourcerootDeclared(scalaVersion) || semanticDbEnabledAlternatively
 
-  def fullClasspath: List[Path] =
-    scalac.classpath.map(_.toAbsolutePath).collect {
-      case path if path.isJar || path.isDirectory =>
-        path.toNIO
-    }
+  /**
+   * If the build server supports lazy classpath resolution, we will
+   * not get any classpath data eagerly and we should not
+   * use this endpoint. It should only be used as a fallback.
+   *
+   * This is due to the fact that we don't request classpath as it
+   * can be resonably expensive.
+   *
+   * @return non empty classpath only if it was resolved prior
+   */
+  def classpath: Option[List[String]] =
+    if (scalac.getClasspath().isEmpty)
+      None
+    else
+      Some(scalac.getClasspath().asScala.toList)
 
   def classDirectory: String = scalac.getClassDirectory()
 
