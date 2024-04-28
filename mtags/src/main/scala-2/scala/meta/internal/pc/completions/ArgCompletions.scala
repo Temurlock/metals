@@ -86,55 +86,93 @@ trait ArgCompletions { this: MetalsGlobal =>
           if (acc.exists(el => el.name == curr.name && el.tpe == curr.tpe)) acc
           else curr :: acc
         )
-        .reverse
+
     lazy val isParamName: Set[String] = params.iterator
       .map(_.name)
       .map(_.toString().trim())
       .toSet
 
-    def isName(m: Member): Boolean =
-      isParamName(m.sym.nameString.trim())
+    lazy val paramNames: List[String] = params.iterator
+      .map(_.name)
+      .map(_.toString().trim())
+      .toList
 
-    override def compare(o1: Member, o2: Member): Int = {
-      val byName = -java.lang.Boolean.compare(isName(o1), isName(o2))
-      if (byName != 0) byName
-      else {
-        java.lang.Boolean.compare(
-          o1.isInstanceOf[NamedArgMember],
-          o2.isInstanceOf[NamedArgMember]
-        )
+
+    def argPosition(m: Member): Int = m match {
+      case o: ArgCompletionTextEditMember => paramNames.indexOf(o.param.nameString.trim())
+      case _: NamedArgMember => paramNames.indexOf(m.sym.nameString.trim())
+      case _ => params.indexWhere{ param =>
+          param.tpe != definitions.AnyTpe && memberMatchType(param.tpe, m)
       }
     }
 
-    override def isPrioritized(member: Member): Boolean = {
-      member.isInstanceOf[NamedArgMember] ||
-      isParamName(member.sym.name.toString().trim())
+    // Проверяем что символ подходит для комплишена аргумента функции
+    // Если встречаются 2 особых, то нужно их отсортировать
+    override def compare(o1: Member, o2: Member): Int = {
+      val byPrioritized = super.compare(o1,o2)
+
+      if (byPrioritized == 0 && isPrioritizedCached(o1)) {
+        val byArgPosition = -java.lang.Integer.compare(argPosition(o1), argPosition(o2))
+        if (byArgPosition != 0) {
+          println(">>>>>>>>>", o1.getClass.getName,argPosition(o1) , o2.getClass.getName, argPosition(o2), params); byArgPosition
+        }
+        else {
+          prioritize(o1).compare(prioritize(o2))
+        }
+      } else byPrioritized
+    }
+
+    // Тут должен быть такой порядок:
+    // 1) обычный member - аргумент a
+    // 2) ArgCompletionTextEditMember - arg1 = a
+    // 3) NamedArgMember - arg1 =
+    private def prioritize(member: Member): Int =
+      member match {
+        case _: ArgCompletionTextEditMember => -1
+        case _: NamedArgMember => 0
+        case _ => -2
+      }
+
+    /* Тут должно быть 3 условия:
+        1) Это ScopeMember, тип которого подходит под тип аргументов функции
+        2) Это NamedArgMember: member.isInstanceOf[NamedArgMember]
+        3) Это ArgCompletionTextEditMember: isParamName.indexOf(member.sym.name.toString().trim()) != -1
+     */
+    override def isPrioritized(member: Member): Boolean = member match {
+      case _: NamedArgMember => true
+      case m: ArgCompletionTextEditMember => isParamName(m.param.nameString.trim())
+      case _ => params.exists(param =>
+        param.tpe != definitions.AnyTpe && memberMatchType(param.tpe, member)
+      )
     }
 
     private def matchingTypesInScope(
         paramType: Type
     ): List[String] = {
 
-      def notNothingOrNull(mem: ScopeMember): Boolean = {
-        !(mem.sym.tpe =:= definitions.NothingTpe || mem.sym.tpe =:= definitions.NullTpe)
-      }
-
       completions match {
         case members: CompletionResult.ScopeMembers
             if paramType != definitions.AnyTpe =>
           members.results
             .collect {
-              case mem
-                  if mem.sym.tpe <:< paramType && notNothingOrNull(
-                    mem
-                  ) && mem.sym.isTerm =>
+              case mem if memberMatchType(paramType, mem) =>
                 mem.sym.name.toString().trim()
             }
-            // None and Nil are always in scope
-            .filter(name => name != "Nil" && name != "None")
         case _ =>
           Nil
       }
+    }
+
+    private def notNothingOrNull(mem: Member): Boolean = {
+      !(mem.sym.tpe =:= definitions.NothingTpe || mem.sym.tpe =:= definitions.NullTpe)
+    }
+
+    private def memberMatchType(paramType: Type, member: Member): Boolean = {
+      if (member.sym.tpe <:< paramType && notNothingOrNull(member) && member.sym.isTerm) {
+        val name = member.sym.name.toString().trim()
+        // None and Nil are always in scope
+        name != "Nil" && name != "None"
+      } else false
     }
 
     private def findDefaultValue(param: Symbol): String = {
@@ -185,12 +223,13 @@ trait ArgCompletions { this: MetalsGlobal =>
           val editText =
             Identifier.backtickWrap(param.name) + " = " + memberName
           val edit = new l.TextEdit(editRange, editText)
-          new TextEditMember(
+          // Место для правок
+          new ArgCompletionTextEditMember(
             filterText = param.name.toString(),
             edit = edit,
-            completionsSymbol(s"$param=$memberName"),
-            label = Some(editText),
-            detail = Some(" : " + param.tpe)
+            param = param,
+            memberName = memberName,
+            label = Some(editText)
           )
         }
       }
