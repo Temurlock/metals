@@ -5,19 +5,19 @@ import java.{util => ju}
 
 import scala.annotation.tailrec
 import scala.collection.mutable
-
 import scala.meta.internal.jdk.CollectionConverters._
 import scala.meta.internal.metals.PcQueryContext
 import scala.meta.internal.mtags.MtagsEnrichments._
 import scala.meta.pc.OffsetParams
 import scala.meta.pc.SymbolSearch
-
 import org.eclipse.lsp4j.CompletionItem
 import org.eclipse.lsp4j.CompletionItemKind
 import org.eclipse.lsp4j.CompletionItemTag
 import org.eclipse.lsp4j.CompletionList
 import org.eclipse.lsp4j.InsertTextFormat
 import org.eclipse.{lsp4j => l}
+
+import scala.util.chaining.scalaUtilChainingOps
 
 class CompletionProvider(
     val compiler: MetalsGlobal,
@@ -59,6 +59,7 @@ class CompletionProvider(
 
     val (i, completion, editRange, query) = safeCompletionsAt(pos, params.uri())
 
+
     val start = inferIdentStart(pos, params.text())
     val end = inferIdentEnd(pos, params.text())
     val oldText = params.text().substring(start, end)
@@ -72,6 +73,7 @@ class CompletionProvider(
     val history = new ShortenedNames()
 
     val sorted = i.results.sorted(memberOrdering(query, history, completion))
+
     lazy val importPosition = autoImportPosition(pos, params.text())
     lazy val context = doLocateImportContext(pos)
 
@@ -357,6 +359,8 @@ class CompletionProvider(
               o.label
             case named: NamedArgMember =>
               s"named-${semanticdbSymbol(named.sym)}"
+            case argNamed: ArgCompletionTextEditMember =>
+              s"${semanticdbSymbol(argNamed.param)}-${semanticdbSymbol(argNamed.argValue)}"
             case _ =>
               semanticdbSymbol(head.sym)
           }

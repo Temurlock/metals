@@ -2,12 +2,10 @@ package scala.meta.internal.pc.completions
 
 import java.net.URI
 import java.util.logging.Level
-
 import scala.collection.immutable.Nil
 import scala.collection.mutable
 import scala.reflect.internal.Chars
 import scala.util.control.NonFatal
-
 import scala.meta.internal.jdk.CollectionConverters._
 import scala.meta.internal.metals.PcQueryContext
 import scala.meta.internal.mtags.BuildInfo
@@ -18,8 +16,9 @@ import scala.meta.internal.pc.InterpolationSplice
 import scala.meta.internal.pc.MemberOrdering
 import scala.meta.internal.pc.MetalsGlobal
 import scala.meta.internal.semanticdb.Scala._
-
 import org.eclipse.{lsp4j => l}
+
+import scala.meta.internal.pc.MemberOrdering.{IsNotLocalByBlock, IsSynthetic, showFlags}
 
 /**
  * Utility methods for completions.
@@ -78,6 +77,27 @@ trait Completions { this: MetalsGlobal =>
       val commitCharacter: Option[String] = None
   ) extends ScopeMember(sym, NoType, true, EmptyTree)
 
+  class ArgCompletionTextEditMember(
+      override val filterText: String,
+      override val edit: l.TextEdit,
+      val param: Symbol,
+      val argValue: Symbol,
+      val memberName: String,
+      override val label: Option[String] = None,
+      override val command: Option[String] = None,
+      override val additionalTextEdits: List[l.TextEdit] = Nil,
+      override val commitCharacter: Option[String] = None
+  ) extends TextEditMember(
+        filterText,
+        edit,
+        argValue,
+        label,
+        Some(" : " + argValue.tpe),
+        command,
+        additionalTextEdits,
+        commitCharacter
+      )
+
   val packageSymbols: mutable.Map[String, Option[Symbol]] =
     mutable.Map.empty[String, Option[Symbol]]
   def packageSymbolFromString(symbol: String): Option[Symbol] =
@@ -122,6 +142,17 @@ trait Completions { this: MetalsGlobal =>
         ) >>> 15
         if (!w.sym.isAbstract) penalty |= MemberOrdering.IsNotAbstract
         penalty
+
+      case n: NamedArgMember if n.accessible => {
+        println("named")
+        val p = computeRelevancePenalty(
+          n.sym,
+          m.implicitlyAdded,
+          isInherited = false
+        )
+        p | IsNotLocalByBlock
+      }
+
       case sm: ScopeMember if sm.accessible =>
         computeRelevancePenalty(
           sm.sym,
@@ -174,6 +205,7 @@ trait Completions { this: MetalsGlobal =>
     if (sym.isSynthetic) relevance |= IsSynthetic
     if (sym.isDeprecated) relevance |= IsDeprecated
     if (isEvilMethod(sym.name)) relevance |= IsEvilMethod
+    println(showFlags(relevance), sym.fullName, sym.getClass.toString)
     relevance
   }
 
@@ -234,17 +266,18 @@ trait Completions { this: MetalsGlobal =>
       }
 
       override def compare(o1: Member, o2: Member): Int = {
-        val byCompletion = completion.compare(o1, o2)
-        if (byCompletion != 0) byCompletion
+
+        val byLocalSymbol = compareLocalSymbols(o1, o2)
+        if (byLocalSymbol != 0) byLocalSymbol
         else {
-          val byLocalSymbol = compareLocalSymbols(o1, o2)
-          if (byLocalSymbol != 0) byLocalSymbol
+          val byRelevance = Integer.compare(
+            relevancePenalty(o1),
+            relevancePenalty(o2)
+          )
+          if (byRelevance != 0) byRelevance
           else {
-            val byRelevance = Integer.compare(
-              relevancePenalty(o1),
-              relevancePenalty(o2)
-            )
-            if (byRelevance != 0) byRelevance
+            val byCompletion = completion.compare(o1, o2)
+            if (byCompletion != 0) byCompletion
             else {
               val byFuzzy =
                 java.lang.Integer.compare(fuzzyScore(o1), fuzzyScore(o2))
