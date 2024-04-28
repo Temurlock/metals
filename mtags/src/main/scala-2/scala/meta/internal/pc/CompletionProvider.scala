@@ -357,6 +357,8 @@ class CompletionProvider(
               o.label
             case named: NamedArgMember =>
               s"named-${semanticdbSymbol(named.sym)}"
+            case argNamed: ArgCompletionTextEditMember =>
+              s"${semanticdbSymbol(argNamed.param)}-${semanticdbSymbol(argNamed.argValue)}"
             case _ =>
               semanticdbSymbol(head.sym)
           }

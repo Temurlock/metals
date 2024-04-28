@@ -1,10 +1,8 @@
 package scala.meta.internal.pc.completions
 
 import scala.collection.immutable.Nil
-
 import scala.meta.internal.pc.Identifier
 import scala.meta.internal.pc.MetalsGlobal
-
 import org.eclipse.{lsp4j => l}
 
 trait ArgCompletions { this: MetalsGlobal =>
@@ -88,59 +86,111 @@ trait ArgCompletions { this: MetalsGlobal =>
           if (acc.exists(el => el.name == curr.name && el.tpe == curr.tpe)) acc
           else curr :: acc
         )
-        .reverse
+
     lazy val isParamName: Set[String] = params.iterator
       .map(_.name)
       .map(_.toString().trim())
       .toSet
 
-    def isName(m: Member): Boolean =
-      isParamName(m.sym.nameString.trim())
+    lazy val paramNames: List[String] = params.iterator
+      .map(_.name)
+      .map(_.toString().trim())
+      .toList
 
-    override def compare(o1: Member, o2: Member): Int = {
-      val byName = -java.lang.Boolean.compare(isName(o1), isName(o2))
-      if (byName != 0) byName
-      else {
-        java.lang.Boolean.compare(
-          o1.isInstanceOf[NamedArgMember],
-          o2.isInstanceOf[NamedArgMember]
-        )
-      }
+    def argPosition(m: Member): Int = m match {
+      case o: ArgCompletionTextEditMember =>
+        paramNames.indexOf(o.param.nameString.trim())
+      case _: NamedArgMember => paramNames.indexOf(m.sym.nameString.trim())
+      case _ =>
+        params.indexWhere { param =>
+          param.tpe != definitions.AnyTpe && memberMatchType(param.tpe, m)
+        }
     }
 
-    override def isPrioritized(member: Member): Boolean = {
-      member.isInstanceOf[NamedArgMember] ||
-      isParamName(member.sym.name.toString().trim())
+    override def compare(o1: Member, o2: Member): Int = {
+      val byPrioritized = super.compare(o1, o2)
+
+      if (byPrioritized == 0 && isPrioritizedCached(o1)) {
+        val byArgPosition =
+          -java.lang.Integer.compare(argPosition(o1), argPosition(o2))
+        if (byArgPosition != 0) {
+           byArgPosition
+        } else {
+          prioritize(o1).compare(prioritize(o2))
+        }
+      } else byPrioritized
+    }
+
+    private def prioritize(member: Member): Int =
+      member match {
+        case _: ArgCompletionTextEditMember => -1
+        case _: NamedArgMember => 0
+        case _ => -2
+      }
+
+    override def isPrioritized(member: Member): Boolean = member match {
+      case _: NamedArgMember => true
+      case m: ArgCompletionTextEditMember =>
+        isParamName(m.param.nameString.trim())
+      case _ =>
+        params.exists(param =>
+          param.tpe != definitions.AnyTpe && memberMatchType(param.tpe, member)
+        )
     }
 
     private def matchingTypesInScope(
         paramType: Type
-    ): List[String] = {
-
-      def notNothingOrNull(mem: ScopeMember): Boolean = {
-        !(mem.sym.tpe =:= definitions.NothingTpe || mem.sym.tpe =:= definitions.NullTpe)
-      }
+    ): List[Symbol] = {
 
       completions match {
         case members: CompletionResult.ScopeMembers
             if paramType != definitions.AnyTpe =>
           members.results
             .collect {
-              case mem
-                  if mem.sym.tpe <:< paramType && notNothingOrNull(
-                    mem
-                  ) && mem.sym.isTerm =>
-                mem.sym.name.toString().trim()
+              case mem if memberMatchType(paramType, mem) =>
+                mem.sym
             }
-            // None and Nil are always in scope
-            .filter(name => name != "Nil" && name != "None")
         case _ =>
           Nil
       }
     }
 
+    private def notNothingOrNull(mem: Member): Boolean = {
+      !(mem.sym.tpe =:= definitions.NothingTpe || mem.sym.tpe =:= definitions.NullTpe)
+    }
+
+    private def memberMatchType(paramType: Type, member: Member): Boolean = {
+      member.sym.tpe match {
+        case _
+            if member.sym.tpe <:< paramType && notNothingOrNull(
+              member
+            ) && member.sym.isTerm =>
+          val name = member.sym.name.toString().trim()
+          // None and Nil are always in scope
+          name != "Nil" && name != "None"
+        case method: MethodType
+            if method.resultType <:< paramType && notNothingOrNull(
+              member
+            ) && member.sym.isTerm =>
+          val name = member.sym.name.toString().trim()
+          // None and Nil are always in scope
+          name != "Nil" && name != "None"
+        case lambda: ArgsTypeRef
+            if lambda.sym.fullName.startsWith(
+              "scala.Function"
+            ) && lambda.args.lastOption.exists(tpe =>
+              tpe <:< paramType && notNothingOrNull(member) && member.sym.isTerm
+            ) =>
+          val name = member.sym.name.toString().trim()
+          // None and Nil are always in scope
+          name != "Nil" && name != "None"
+        case _ => false
+      }
+    }
+
     private def findDefaultValue(param: Symbol): String = {
       val matchingType = matchingTypesInScope(param.tpe)
+        .map(_.name.toString().trim())
       if (matchingType.size == 1) {
         s":${matchingType.head}"
       } else if (matchingType.size > 1) {
@@ -183,16 +233,18 @@ trait ArgCompletions { this: MetalsGlobal =>
     private def findPossibleDefaults(): List[TextEditMember] = {
       params.flatMap { param =>
         val allMembers = matchingTypesInScope(param.tpe)
-        allMembers.map { memberName =>
+        allMembers.map { member =>
+          val memberName = member.name.toString().trim()
           val editText =
             Identifier.backtickWrap(param.name) + " = " + memberName
           val edit = new l.TextEdit(editRange, editText)
-          new TextEditMember(
+          new ArgCompletionTextEditMember(
             filterText = param.name.toString(),
             edit = edit,
-            completionsSymbol(s"$param=$memberName"),
-            label = Some(editText),
-            detail = Some(" : " + param.tpe)
+            param = param,
+            argValue = member,
+            memberName = memberName,
+            label = Some(editText)
           )
         }
       }
