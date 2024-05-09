@@ -192,6 +192,8 @@ trait Completions { this: MetalsGlobal =>
     new Ordering[Member] {
       val queryLower = query.toLowerCase()
       val fuzzyCache = mutable.Map.empty[Symbol, Int]
+      val referenceCache = mutable.Map.empty[Symbol, Int]
+
       def compareLocalSymbols(o1: Member, o2: Member): Int = {
         if (
           o1.sym.isLocallyDefinedSymbol &&
@@ -215,6 +217,28 @@ trait Completions { this: MetalsGlobal =>
           }
         )
       }
+
+      def compareFrequency(o1: Member, o2: Member): Int = {
+        (o1, o2) match {
+          case (w1: WorkspaceMember, w2: WorkspaceMember) =>
+            -referenceCache
+              .getOrElseUpdate(
+                w1.sym,
+                referenceCounter
+                  .references(buildTargetIdentifier, semanticdbSymbol(w1.sym))
+              )
+              .compareTo(
+                referenceCache
+                  .getOrElseUpdate(
+                    w2.sym,
+                    referenceCounter
+                      .references(buildTargetIdentifier, semanticdbSymbol(w2.sym))
+                  )
+              )
+          case _ => 0
+        }
+      }
+
       override def compare(o1: Member, o2: Member): Int = {
         val byCompletion = completion.compare(o1, o2)
         if (byCompletion != 0) byCompletion
@@ -232,25 +256,29 @@ trait Completions { this: MetalsGlobal =>
                 java.lang.Integer.compare(fuzzyScore(o1), fuzzyScore(o2))
               if (byFuzzy != 0) byFuzzy
               else {
-                val byIdentifier =
-                  IdentifierComparator.compare(
-                    o1.sym.name.decode,
-                    o2.sym.name.decode
-                  )
-                if (byIdentifier != 0) byIdentifier
+                val byFrequency = compareFrequency(o1, o2)
+                if (byFrequency != 0) byFrequency
                 else {
-                  val byOwner =
-                    o1.sym.owner.fullName.compareTo(o2.sym.owner.fullName)
-                  if (byOwner != 0) byOwner
-                  else {
-                    val byParamCount = Integer.compare(
-                      o1.sym.paramss.iterator.flatten.size,
-                      o2.sym.paramss.iterator.flatten.size
+                  val byIdentifier =
+                    IdentifierComparator.compare(
+                      o1.sym.name.decode,
+                      o2.sym.name.decode
                     )
-                    if (byParamCount != 0) byParamCount
+                  if (byIdentifier != 0) byIdentifier
+                  else {
+                    val byOwner =
+                      o1.sym.owner.fullName.compareTo(o2.sym.owner.fullName)
+                    if (byOwner != 0) byOwner
                     else {
-                      detailString(o1, history)
-                        .compareTo(detailString(o2, history))
+                      val byParamCount = Integer.compare(
+                        o1.sym.paramss.iterator.flatten.size,
+                        o2.sym.paramss.iterator.flatten.size
+                      )
+                      if (byParamCount != 0) byParamCount
+                      else {
+                        detailString(o1, history)
+                          .compareTo(detailString(o2, history))
+                      }
                     }
                   }
                 }

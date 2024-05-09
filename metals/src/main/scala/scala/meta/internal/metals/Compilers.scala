@@ -31,6 +31,8 @@ import scala.meta.pc.HoverSignature
 import scala.meta.pc.OffsetParams
 import scala.meta.pc.PresentationCompiler
 import scala.meta.pc.SymbolSearch
+import scala.meta.pc.SyntheticDecoration
+import scala.meta.pc.ReferenceCountProvider
 import scala.meta.pc.SyntheticDecorationsParams
 
 import ch.epfl.scala.bsp4j.BuildTargetIdentifier
@@ -81,6 +83,7 @@ class Compilers(
     mtagsResolver: MtagsResolver,
     sourceMapper: SourceMapper,
     worksheetProvider: WorksheetProvider,
+    referenceCounter: ReferenceCountProvider,
 )(implicit ec: ExecutionContextExecutorService, rc: ReportContext)
     extends Cancelable {
 
@@ -142,10 +145,10 @@ class Compilers(
                 lazyPc
               } else {
                 presentationCompiler.shutdown()
-                StandaloneCompiler(scalaVersion, search, Nil)
+                StandaloneCompiler(scalaVersion, search, Nil, referenceCounter)
               }
             case None =>
-              StandaloneCompiler(scalaVersion, search, Nil)
+              StandaloneCompiler(scalaVersion, search, Nil, referenceCounter)
           }
         },
       )
@@ -949,6 +952,7 @@ class Compilers(
             classpath,
             sources,
             search,
+            referenceCounter
           )
         },
       )
@@ -964,6 +968,7 @@ class Compilers(
             classpath,
             sources,
             Some(search),
+            referenceCounter
           )
         },
       )
@@ -980,7 +985,7 @@ class Compilers(
           workDoneProgress.trackBlocking(
             s"${config.icons.sync}Loading presentation compiler"
           ) {
-            JavaLazyCompiler(targetId, search)
+            JavaLazyCompiler(targetId, search, referenceCounter)
           }
         },
       )
@@ -1006,7 +1011,7 @@ class Compilers(
             workDoneProgress.trackBlocking(
               s"${config.icons.sync}Loading presentation compiler"
             ) {
-              ScalaLazyCompiler(scalaTarget, mtags, search)
+              ScalaLazyCompiler(scalaTarget, mtags, search, referenceCounter)
             }
           },
         )

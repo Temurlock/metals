@@ -47,6 +47,7 @@ class Completions(
     workspace: Option[Path],
     autoImports: AutoImportsGenerator,
     options: List[String],
+    referenceCounter: ReferenceCountProvider,
 )(using ReportContext):
 
   implicit val context: Context = ctx
@@ -876,6 +877,7 @@ class Completions(
     new Ordering[CompletionValue]:
       val queryLower = completionPos.query.toLowerCase()
       val fuzzyCache = mutable.Map.empty[CompletionValue, Int]
+      val referenceCache = mutable.Map.empty[Symbol, Int]
 
       def compareLocalSymbols(s1: Symbol, s2: Symbol): Int =
         if s1.isLocal && s2.isLocal && s1.sourcePos.exists && s2.sourcePos.exists
@@ -884,6 +886,25 @@ class Completions(
           if firstIsAfter then -1 else 1
         else 0
       end compareLocalSymbols
+
+      def compareFrequency(o1: CompletionValue, o2: CompletionValue): Int =
+        (o1, o2) match
+          case (w1: CompletionValue.Workspace, w2: CompletionValue.Workspace) =>
+            -referenceCache
+              .getOrElseUpdate(
+                w1.symbol,
+                referenceCounter
+                  .references(buildTargetIdentifier, SemanticdbSymbols.symbolName(w1.symbol)),
+              )
+              .compareTo(
+                referenceCache.getOrElseUpdate(
+                  w2.symbol,
+                  referenceCounter
+                    .references(buildTargetIdentifier, SemanticdbSymbols.symbolName(w2.symbol)),
+                )
+              )
+          case _ => 0
+      end compareFrequency
 
       def compareByRelevance(o1: CompletionValue, o2: CompletionValue): Int =
         Integer.compare(
@@ -984,23 +1005,27 @@ class Completions(
                   )
                   if byFuzzy != 0 then byFuzzy
                   else
-                    val byIdentifier = IdentifierComparator.compare(
-                      s1.name.show,
-                      s2.name.show,
-                    )
-                    if byIdentifier != 0 then byIdentifier
+                    val byFrequency = compareFrequency(o1, o2)
+                    if byFrequency != 0 then byFrequency
                     else
-                      val byOwner =
-                        s1.owner.fullName.toString
-                          .compareTo(s2.owner.fullName.toString)
-                      if byOwner != 0 then byOwner
+                      val byIdentifier = IdentifierComparator.compare(
+                        s1.name.show,
+                        s2.name.show,
+                      )
+                      if byIdentifier != 0 then byIdentifier
                       else
-                        val byParamCount = Integer.compare(
-                          s1.paramSymss.flatten.size,
-                          s2.paramSymss.flatten.size,
-                        )
-                        if byParamCount != 0 then byParamCount
-                        else s1.detailString.compareTo(s2.detailString)
+                        val byOwner =
+                          s1.owner.fullName.toString
+                            .compareTo(s2.owner.fullName.toString)
+                        if byOwner != 0 then byOwner
+                        else
+                          val byParamCount = Integer.compare(
+                            s1.paramSymss.flatten.size,
+                            s2.paramSymss.flatten.size,
+                          )
+                          if byParamCount != 0 then byParamCount
+                          else s1.detailString.compareTo(s2.detailString)
+                    end if
                   end if
                 end if
               end if

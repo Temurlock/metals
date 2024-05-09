@@ -27,6 +27,7 @@ import scala.meta.pc.ParentSymbols
 import scala.meta.pc.PresentationCompilerConfig
 import scala.meta.pc.SymbolDocumentation
 import scala.meta.pc.SymbolSearch
+import scala.meta.pc.ReferenceCountProvider
 
 import org.eclipse.{lsp4j => l}
 
@@ -36,7 +37,8 @@ class MetalsGlobal(
     val search: SymbolSearch,
     val buildTargetIdentifier: String,
     val metalsConfig: PresentationCompilerConfig,
-    val workspace: Option[Path]
+    val workspace: Option[Path],
+    val referenceCounter: ReferenceCountProvider
 ) extends Global(settings, reporter)
     with completions.Completions
     with completions.AmmoniteFileCompletions
