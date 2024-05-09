@@ -20,8 +20,8 @@ import scala.meta.internal.pc.JavaPresentationCompiler
 import scala.meta.internal.pc.ScalaPresentationCompiler
 import scala.meta.io.AbsolutePath
 import scala.meta.pc.PresentationCompiler
+import scala.meta.pc.ReferenceCountProvider
 import scala.meta.pc.SymbolSearch
-
 import ch.epfl.scala.bsp4j.BuildTargetIdentifier
 import org.eclipse.lsp4j.InitializeParams
 
@@ -51,6 +51,7 @@ class CompilerConfiguration(
       scalaVersion: String,
       symbolSearch: SymbolSearch,
       classpath: Seq[Path],
+      referenceCounter: ReferenceCountProvider,
   ) extends MtagsPresentationCompiler {
     private val mtags =
       mtagsResolver.resolve(scalaVersion).getOrElse(MtagsBinaries.BuildIn)
@@ -62,6 +63,7 @@ class CompilerConfiguration(
         classpath ++ Embedded.scalaLibrary(scalaVersion),
         "default",
         symbolSearch,
+        referenceCounter
       )
 
     def shutdown(): Unit = standalone.shutdown()
@@ -75,6 +77,7 @@ class CompilerConfiguration(
         classpath: Seq[Path],
         sources: Seq[Path],
         workspaceFallback: Option[SymbolSearch],
+        referenceCounter: ReferenceCountProvider
     ): StandaloneCompiler = {
       val search =
         createStandaloneSearch(classpath, sources, workspaceFallback)
@@ -82,6 +85,7 @@ class CompilerConfiguration(
         scalaVersion,
         search,
         classpath,
+        referenceCounter
       )
     }
   }
@@ -154,6 +158,7 @@ class CompilerConfiguration(
       scalaTarget: ScalaTarget,
       mtags: MtagsBinaries,
       search: SymbolSearch,
+      referenceCounter: ReferenceCountProvider,
       additionalClasspath: Seq[Path] = Nil,
   ) extends LazyCompiler {
 
@@ -162,7 +167,7 @@ class CompilerConfiguration(
     protected def newCompiler(classpath: Seq[Path]): PresentationCompiler = {
       val name = scalaTarget.scalac.getTarget().getUri
       val options = enrichWithReleaseOption(scalaTarget)
-      fromMtags(mtags, options, classpath ++ additionalClasspath, name, search)
+      fromMtags(mtags, options, classpath ++ additionalClasspath, name, search, referenceCounter)
         .withBuildTargetName(scalaTarget.displayName)
     }
 
@@ -172,6 +177,7 @@ class CompilerConfiguration(
         Nil,
         Nil,
         Some(search),
+        referenceCounter
       ).standalone
 
   }
@@ -184,6 +190,7 @@ class CompilerConfiguration(
         classpath: Seq[Path],
         sources: Seq[Path],
         workspaceFallback: SymbolSearch,
+        referenceCounter: ReferenceCountProvider
     ): ScalaLazyCompiler = {
 
       val worksheetSearch =
@@ -193,6 +200,7 @@ class CompilerConfiguration(
         scalaTarget,
         mtags,
         worksheetSearch,
+        referenceCounter,
         classpath,
       )
     }
@@ -201,13 +209,14 @@ class CompilerConfiguration(
   case class JavaLazyCompiler(
       targetId: BuildTargetIdentifier,
       search: SymbolSearch,
+      referenceCountProvider: ReferenceCountProvider
   ) extends LazyCompiler {
 
     def buildTargetId: BuildTargetIdentifier = targetId
 
     protected def newCompiler(classpath: Seq[Path]): PresentationCompiler = {
       val pc = JavaPresentationCompiler()
-      configure(pc, search)
+      configure(pc, search, referenceCountProvider)
         .newInstance(
           targetId.getUri(),
           classpath.asJava,
@@ -222,9 +231,11 @@ class CompilerConfiguration(
   private def configure(
       pc: PresentationCompiler,
       search: SymbolSearch,
+      referenceCounter: ReferenceCountProvider,
   ): PresentationCompiler =
     pc.withSearch(search)
       .withExecutorService(ec)
+      .withReferenceCounter(referenceCounter)
       .withWorkspace(workspace.toNIO)
       .withScheduledExecutorService(sh)
       .withReportsLoggerLevel(MetalsServerConfig.default.loglevel)
@@ -249,6 +260,7 @@ class CompilerConfiguration(
       classpathSeq: Seq[Path],
       name: String,
       symbolSearch: SymbolSearch,
+      referenceCounter: ReferenceCountProvider,
   ): PresentationCompiler = {
     val pc = mtags match {
       case MtagsBinaries.BuildIn => new ScalaPresentationCompiler()
@@ -257,7 +269,7 @@ class CompilerConfiguration(
     }
 
     val filteredOptions = plugins.filterSupportedOptions(options)
-    configure(pc, symbolSearch)
+    configure(pc, symbolSearch, referenceCounter)
       .newInstance(
         name,
         classpathSeq.asJava,

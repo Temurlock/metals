@@ -635,6 +635,7 @@ class MetalsLspService(
       mtagsResolver,
       sourceMapper,
       worksheetProvider,
+      referencesProvider,
     )
   )
 

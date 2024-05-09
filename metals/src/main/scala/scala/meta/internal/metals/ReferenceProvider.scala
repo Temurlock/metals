@@ -32,6 +32,8 @@ import com.google.common.hash.Funnels
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.ReferenceParams
 
+import scala.meta.pc.ReferenceCountProvider
+
 final class ReferenceProvider(
     workspace: AbsolutePath,
     semanticdbs: Semanticdbs,
@@ -39,7 +41,8 @@ final class ReferenceProvider(
     definition: DefinitionProvider,
     trees: Trees,
     buildTargets: BuildTargets,
-) extends SemanticdbFeatureProvider {
+) extends SemanticdbFeatureProvider
+    with ReferenceCountProvider {
   private var referencedPackages: BloomFilter[CharSequence] =
     BloomFilters.create(10000)
 
@@ -305,6 +308,24 @@ final class ReferenceProvider(
       } yield sourcePath
 
       result
+    }
+  }
+  override def references(
+      buildTargetIdentifier: String,
+      symbol: String,
+  ): Integer = {
+    val visited = scala.collection.mutable.Set.empty[AbsolutePath]
+    index.iterator.count { case (path, entry) =>
+      if (
+        entry.id.getUri == buildTargetIdentifier
+        && entry.bloom.mightContain(symbol)
+      ) {
+        val sourcePath = AbsolutePath(path)
+        if (!visited(sourcePath)) {
+          visited.add(sourcePath)
+          sourcePath.exists
+        } else false
+      } else false
     }
   }
 

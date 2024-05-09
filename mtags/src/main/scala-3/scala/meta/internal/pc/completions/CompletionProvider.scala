@@ -13,6 +13,7 @@ import scala.meta.internal.pc.printer.MetalsPrinter
 import scala.meta.pc.OffsetParams
 import scala.meta.pc.PresentationCompilerConfig
 import scala.meta.pc.SymbolSearch
+import scala.meta.pc.ReferenceCountProvider
 
 import dotty.tools.dotc.ast.tpd
 import dotty.tools.dotc.ast.tpd.*
@@ -37,6 +38,7 @@ class CompletionProvider(
     config: PresentationCompilerConfig,
     buildTargetIdentifier: String,
     folderPath: Option[Path],
+    referenceCounter: ReferenceCountProvider,
 )(using reports: ReportContext):
   def completions(): CompletionList =
     val uri = params.uri
@@ -83,6 +85,7 @@ class CompletionProvider(
             folderPath,
             autoImportsGen,
             driver.settings,
+            referenceCounter,
           ).completions()
 
         val items = completions.zipWithIndex.map { case (item, idx) =>

@@ -23,6 +23,7 @@ import scala.meta.pc.PresentationCompilerConfig
 import scala.meta.pc.RangeParams
 import scala.meta.pc.SymbolSearch
 import scala.meta.pc.VirtualFileParams
+import scala.meta.pc.ReferenceCountProvider
 
 import org.eclipse.lsp4j
 import org.eclipse.lsp4j.CompletionItem
@@ -178,6 +179,10 @@ case class JavaPresentationCompiler(
 
   override def withWorkspace(workspace: Path): PresentationCompiler =
     copy(workspace = Some(workspace))
+
+  override def withReferenceCounter(
+      provider: ReferenceCountProvider
+  ): PresentationCompiler = this
 
   override def newInstance(
       buildTargetIdentifier: String,

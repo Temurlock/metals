@@ -40,6 +40,7 @@ import scala.meta.pc.RangeParams
 import scala.meta.pc.SymbolSearch
 import scala.meta.pc.VirtualFileParams
 import scala.meta.pc.{PcSymbolInformation => IPcSymbolInformation}
+import scala.meta.pc.ReferenceCountProvider
 
 import org.eclipse.lsp4j.CompletionItem
 import org.eclipse.lsp4j.CompletionList
@@ -61,7 +62,8 @@ case class ScalaPresentationCompiler(
     sh: Option[ScheduledExecutorService] = None,
     config: PresentationCompilerConfig = PresentationCompilerConfigImpl(),
     folderPath: Option[Path] = None,
-    reportsLevel: ReportLevel = ReportLevel.Info
+    reportsLevel: ReportLevel = ReportLevel.Info,
+    referenceCounter: ReferenceCountProvider = (_: String, _: String) => 0
 ) extends PresentationCompiler {
 
   implicit val executionContext: ExecutionContextExecutor = ec
@@ -104,6 +106,11 @@ case class ScalaPresentationCompiler(
       config: PresentationCompilerConfig
   ): PresentationCompiler =
     copy(config = config)
+
+  override def withReferenceCounter(
+      provider: ReferenceCountProvider
+  ): PresentationCompiler =
+    copy(referenceCounter = provider)
 
   def this() = this(buildTargetIdentifier = "")
 
@@ -450,7 +457,8 @@ case class ScalaPresentationCompiler(
       search,
       buildTargetIdentifier,
       config,
-      folderPath
+      folderPath,
+      referenceCounter
     )
   }
 
