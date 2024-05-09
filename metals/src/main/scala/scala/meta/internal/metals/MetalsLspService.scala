@@ -152,6 +152,7 @@ class MetalsLspService(
 
   private val cancelables = new MutableCancelable()
   val isCancelled = new AtomicBoolean(false)
+  val wasInitialized = new AtomicBoolean(false)
 
   override def cancel(): Unit = {
     if (isCancelled.compareAndSet(false, true)) {
@@ -817,7 +818,6 @@ class MetalsLspService(
     new FolderTreeViewProvider(
       new Folder(folder, folderVisibleName, true),
       buildTargets,
-      () => buildClient.ongoingCompilations(),
       definitionIndex,
       () => userConfig,
       scalaVersionSelector,
@@ -930,27 +930,28 @@ class MetalsLspService(
     } yield buildServerPromise.trySuccess(())
   }
 
-  def initialized(): Future[Unit] = {
-    registerNiceToHaveFilePatterns()
+  def initialized(): Future[Unit] =
+    if (wasInitialized.compareAndSet(false, true)) {
+      registerNiceToHaveFilePatterns()
 
-    for {
-      _ <- loadFingerPrints()
-      _ <-
-        Future
-          .sequence(
-            List[Future[Unit]](
-              withWillGenerateBspConfig {
-                for {
-                  _ <- maybeSetupScalaCli()
-                  _ <- fullConnect()
-                } yield ()
-              },
-              Future(workspaceSymbols.indexClasspath()),
-              Future(formattingProvider.load()),
+      for {
+        _ <- loadFingerPrints()
+        _ <-
+          Future
+            .sequence(
+              List[Future[Unit]](
+                withWillGenerateBspConfig {
+                  for {
+                    _ <- maybeSetupScalaCli()
+                    _ <- fullConnect()
+                  } yield ()
+                },
+                Future(workspaceSymbols.indexClasspath()),
+                Future(formattingProvider.load()),
+              )
             )
-          )
-    } yield ()
-  }
+      } yield ()
+    } else Future.unit
 
   def onShutdown(): Unit = {
     tables.fingerprints.save(fingerprints.getAllFingerprints().filter {
@@ -2140,10 +2141,9 @@ class MetalsLspService(
       forceImport: Boolean
   ): Future[BuildChange] = {
     val chosenBuildServer = tables.buildServers.selectedServer()
-    def useBuildToolBsp(buildTool: BuildTool) =
+    def useBuildToolBsp(buildTool: BloopInstallProvider) =
       buildTool match {
-        case _: BloopInstallProvider => userConfig.defaultBspToBuildTool
-        case _: BuildServerProvider => true
+        case _: BuildServerProvider => userConfig.defaultBspToBuildTool
         case _ => false
       }
 
