@@ -77,6 +77,21 @@ trait Completions { this: MetalsGlobal =>
       val commitCharacter: Option[String] = None
   ) extends ScopeMember(sym, NoType, true, EmptyTree)
 
+  class ArgCompletionTextEditMember(
+      override val filterText: String,
+      override val edit: l.TextEdit,
+      val param: Symbol,
+      val memberName: String,
+      override val label: Option[String] = None,
+      override val command: Option[String] = None,
+      override val additionalTextEdits: List[l.TextEdit] = Nil,
+      override val commitCharacter: Option[String] = None
+  ) extends TextEditMember(
+    filterText, edit, completionsSymbol(s"$param=$memberName"),
+    label, Some(" : " + param.tpe), command, additionalTextEdits,
+    commitCharacter
+  )
+
   val packageSymbols: mutable.Map[String, Option[Symbol]] =
     mutable.Map.empty[String, Option[Symbol]]
   def packageSymbolFromString(symbol: String): Option[Symbol] =

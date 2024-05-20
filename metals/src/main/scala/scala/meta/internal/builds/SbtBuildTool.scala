@@ -341,8 +341,8 @@ object SbtBuildTool {
         "This plugin enables semantic information to be produced by sbt.",
         "It also adds support for debugging using the Debug Adapter Protocol",
       ),
-      s""""org.scalameta" % "sbt-metals" % "${BuildInfo.metalsVersion}"""",
-      sonatypeResolver(BuildInfo.metalsVersion),
+      s""""org.scalameta" % "sbt-metals" % "1.3.0"""",
+      sonatypeResolver("1.3.0"),
     )
   }
 
