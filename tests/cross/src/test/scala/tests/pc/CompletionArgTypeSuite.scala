@@ -83,4 +83,23 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
        |""".stripMargin,
     topLines = Option(4)
   )
+
+  check(
+    "arg5",
+    s"""|object Main {
+        |
+        |  def bb(): Int = 123
+        |
+        |  val aa = 10
+        |  def foo(bb: Int) = ???
+        |  foo(b@@)
+        |}
+        |""".stripMargin,
+    """|bb(): Int
+       |bb = aa : Int
+       |bb = bb : Int
+       |bb = : Int
+       |""".stripMargin,
+    topLines = Option(4)
+  )
 }
