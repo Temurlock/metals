@@ -85,21 +85,27 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
   )
 
   check(
-    "arg5",
+    "arg5-method",
     s"""|object Main {
         |
-        |  def bb(): Int = 123
+        |def foo(ba: Int, voookuu: String): Unit = ???
+        |def baInt(v: String): Int = ???
         |
-        |  val aa = 10
-        |  def foo(bb: Int) = ???
-        |  foo(b@@)
+        |val baaaa = "asdasd"
+        |val bawww = 3
+        |
+        |foo(ba@@)
         |}
         |""".stripMargin,
-    """bb(): Int
-       |bb = Integer2int : Int
-       |bb = aa : Int
-       |bb = bb : Int
+    """bawww: Int
+      |baInt(v: String): Int
+      |ba = Integer2int : Int
+      |ba = baInt : Int
+      |ba = bawww : Int
+      |ba = hashCode : Int
+      |ba = : Int
+      |baaaa: String
        |""".stripMargin,
-    topLines = Option(4)
+    topLines = Option(8)
   )
 }
