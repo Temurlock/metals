@@ -95,10 +95,10 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
         |  foo(b@@)
         |}
         |""".stripMargin,
-    """|bb(): Int
+    """bb(): Int
+       |bb = Integer2int : Int
        |bb = aa : Int
        |bb = bb : Int
-       |bb = : Int
        |""".stripMargin,
     topLines = Option(4)
   )
