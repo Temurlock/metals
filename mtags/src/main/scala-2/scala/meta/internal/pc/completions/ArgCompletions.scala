@@ -167,12 +167,19 @@ trait ArgCompletions { this: MetalsGlobal =>
       !(mem.sym.tpe =:= definitions.NothingTpe || mem.sym.tpe =:= definitions.NullTpe)
     }
 
-    private def memberMatchType(paramType: Type, member: Member): Boolean = member.sym.tpe match {
-        case _ if member.sym.tpe <:< paramType && notNothingOrNull(member) && member.sym.isTerm =>
+    private def memberMatchType(paramType: Type, member: Member): Boolean =
+      member.sym.tpe match {
+        case _
+            if member.sym.tpe <:< paramType && notNothingOrNull(
+              member
+            ) && member.sym.isTerm =>
           val name = member.sym.name.toString().trim()
           // None and Nil are always in scope
           name != "Nil" && name != "None"
-        case method:MethodType if method.resultType <:< paramType && notNothingOrNull(member) && member.sym.isTerm =>
+        case method: MethodType
+            if method.resultType <:< paramType && notNothingOrNull(
+              member
+            ) && member.sym.isTerm =>
           val name = member.sym.name.toString().trim()
           // None and Nil are always in scope
           name != "Nil" && name != "None"
