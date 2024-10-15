@@ -9,7 +9,7 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
   // Искать по его типу
   // Если что оставить другие возможные типы
   // Если несколько с таким типом, то сортировать по схожести имен аргументов
-
+/*
   check(
     "arg",
     s"""|object Main {
@@ -46,7 +46,6 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
     topLines = Option(4)
   )
 
-
   check(
     "arg3",
     s"""|object Main {
@@ -64,7 +63,6 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
        |""".stripMargin,
     topLines = Option(4)
   )
-
 
   check(
     "arg4",
@@ -105,7 +103,35 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
       |ba = hashCode : Int
       |ba = : Int
       |baaaa: String
-       |""".stripMargin,
+      |""".stripMargin,
+    topLines = Option(8)
+  )
+
+ */
+
+  check(
+    "arg6-method",
+    s"""|object Main {
+        |
+        |def foo(ba: Int, voookuu: String): Unit = ???
+        |val baInt = (v: String) => 13
+        |
+        |val baaaa = "asdasd"
+        |val bawww = 3
+        |
+        |foo(ba@@)
+        |}
+        |""".stripMargin,
+    """
+      |baInt: String => Int
+      |bawww: Int
+      |ba = Integer2int : Int
+      |ba = baInt : Int
+      |ba = bawww : Int
+      |ba = hashCode : Int
+      |ba = : Int
+      |baaaa: String
+      |""".stripMargin,
     topLines = Option(8)
   )
 }

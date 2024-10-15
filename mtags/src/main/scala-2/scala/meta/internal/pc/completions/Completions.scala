@@ -87,10 +87,15 @@ trait Completions { this: MetalsGlobal =>
       override val additionalTextEdits: List[l.TextEdit] = Nil,
       override val commitCharacter: Option[String] = None
   ) extends TextEditMember(
-    filterText, edit, completionsSymbol(s"$param=$memberName"),
-    label, Some(" : " + param.tpe), command, additionalTextEdits,
-    commitCharacter
-  )
+        filterText,
+        edit,
+        completionsSymbol(s"$param=$memberName"),
+        label,
+        Some(" : " + param.tpe),
+        command,
+        additionalTextEdits,
+        commitCharacter
+      )
 
   val packageSymbols: mutable.Map[String, Option[Symbol]] =
     mutable.Map.empty[String, Option[Symbol]]
