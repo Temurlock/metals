@@ -2,6 +2,8 @@ package tests.pc
 
 import tests.BaseCompletionSuite
 
+import scala.language.ScalaSource
+
 class CompletionArgTypeSuite extends BaseCompletionSuite {
 
   // Нужно понять как сортировать.
@@ -9,7 +11,7 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
   // Искать по его типу
   // Если что оставить другие возможные типы
   // Если несколько с таким типом, то сортировать по схожести имен аргументов
-/*
+
   check(
     "arg",
     s"""|object Main {
@@ -25,8 +27,18 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
        |banana = : String
        |a: Int
        |""".stripMargin,
-    topLines = Option(4)
+    topLines = Option(8)
   )
+
+  /*
+  (notGetter, notCaseAccessor,arg.Main.banana,class scala.reflect.internal.Symbols$TermSymbol)
+  (notLocalByBlock, notCaseAccessor,arg.Main.b,class scala.reflect.internal.Symbols$TermSymbol)
+
+  Но почему так?
+
+  (value value banana=b,notDefinedInFile, notGetter, notCaseAccessor, synthetic)
+  (value b,notLocalByBlock, notCaseAccessor)
+   */
 
   check(
     "arg1",
@@ -43,7 +55,7 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
        |banana = b : String
        |banana = : String
        |""".stripMargin,
-    topLines = Option(4)
+    topLines = Option(8)
   )
 
   check(
@@ -61,7 +73,7 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
        |a = : Int
        |a: String
        |""".stripMargin,
-    topLines = Option(4)
+    topLines = Option(8)
   )
 
   check(
@@ -79,7 +91,7 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
        |bb = bb : Int
        |bb = : Int
        |""".stripMargin,
-    topLines = Option(4)
+    topLines = Option(8)
   )
 
   check(
@@ -107,7 +119,6 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
     topLines = Option(8)
   )
 
- */
 
   check(
     "arg6-method",
@@ -134,4 +145,5 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
       |""".stripMargin,
     topLines = Option(8)
   )
+
 }

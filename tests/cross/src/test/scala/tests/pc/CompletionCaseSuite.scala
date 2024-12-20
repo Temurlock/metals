@@ -573,7 +573,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
       |case class Foo(a: Int, b: Int)
       |
       |object A {
-      |  
+      |
       |  List(Foo(1,2)).map{ cas@@ }
       |}""".stripMargin,
     """|case Foo(a, b) => example
@@ -588,7 +588,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
       |object A {
       |  val x: Vector = ???
       |  x match {
-      |    ca@@  
+      |    ca@@
       |  }
       |}""".stripMargin,
     """|case
@@ -602,7 +602,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
       |object A {
       |  private enum A:
       |    case B, C
-      |  def testMe(a: A) = 
+      |  def testMe(a: A) =
       |    a match
       |      cas@@
       |}""".stripMargin,
@@ -640,7 +640,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
         |
         |import Activity.*
         |
-        |def energySpend(act: Activity & (Physical | Chore)): Double = 
+        |def energySpend(act: Activity & (Physical | Chore)): Double =
         |  act match
         |    cas@@
         |
@@ -669,7 +669,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
         |
         |import Activity.*
         |
-        |def energySpend(act: Activity & Physical): Double = 
+        |def energySpend(act: Activity & Physical): Double =
         |  act match
         |    cas@@
         |
@@ -715,7 +715,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
         |
         |  enum Animal:
         |    case Cat, Dog
-        | 
+        |
         |  val animal: Id[Animal] = ???
         |
         |  animal match
@@ -736,7 +736,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
         |   case class Cat() extends Animal
         |   case object Dog extends Animal
         |}
-        | 
+        |
         | val animal: Id[Animal] = ???
         |
         |  animal match {
@@ -824,7 +824,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
         |
         |object O {
         |  val x: Foo | Bar = ???
-        |  val y  = List(x).map{ 
+        |  val y  = List(x).map{
         |\tcase Foo(a) => $$0
         |\tcase Bar(b) =>
         | }
@@ -839,7 +839,7 @@ class CompletionCaseSuite extends BaseCompletionSuite {
       |object A {
       |  import scala.compiletime.summonFrom
       |  class A
-      |  
+      |
       |  inline def f: Any = summonFrom {
       |    case x@@: A => ???  // error: ambiguous givens
       |  }
@@ -853,11 +853,11 @@ class CompletionCaseSuite extends BaseCompletionSuite {
     """
       |object A {
       |  import scala.compiletime.summonFrom
-      |  
+      |
       |  class A
       |  given a1: A = new A
       |  given a2: A = new A
-      |  
+      |
       |  inline def f: Any = summonFrom {
       |    case x@@: A => ???  // error: ambiguous givens
       |  }

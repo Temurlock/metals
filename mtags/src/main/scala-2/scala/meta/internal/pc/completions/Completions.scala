@@ -2,12 +2,10 @@ package scala.meta.internal.pc.completions
 
 import java.net.URI
 import java.util.logging.Level
-
 import scala.collection.immutable.Nil
 import scala.collection.mutable
 import scala.reflect.internal.Chars
 import scala.util.control.NonFatal
-
 import scala.meta.internal.jdk.CollectionConverters._
 import scala.meta.internal.mtags.BuildInfo
 import scala.meta.internal.mtags.CoursierComplete
@@ -17,8 +15,10 @@ import scala.meta.internal.pc.InterpolationSplice
 import scala.meta.internal.pc.MemberOrdering
 import scala.meta.internal.pc.MetalsGlobal
 import scala.meta.internal.semanticdb.Scala._
-
 import org.eclipse.{lsp4j => l}
+
+import scala.meta.internal.pc.MemberOrdering.{IsNotLocalByBlock, IsSynthetic, showFlags}
+import scala.util.chaining.scalaUtilChainingOps
 
 /**
  * Utility methods for completions.
@@ -81,6 +81,7 @@ trait Completions { this: MetalsGlobal =>
       override val filterText: String,
       override val edit: l.TextEdit,
       val param: Symbol,
+      val argValue: Symbol,
       val memberName: String,
       override val label: Option[String] = None,
       override val command: Option[String] = None,
@@ -89,7 +90,7 @@ trait Completions { this: MetalsGlobal =>
   ) extends TextEditMember(
         filterText,
         edit,
-        completionsSymbol(s"$param=$memberName"),
+        argValue,
         label,
         Some(" : " + param.tpe),
         command,
@@ -141,6 +142,17 @@ trait Completions { this: MetalsGlobal =>
         ) >>> 15
         if (!w.sym.isAbstract) penalty |= MemberOrdering.IsNotAbstract
         penalty
+
+      case n: NamedArgMember if n.accessible => {
+        println("named")
+        val p = computeRelevancePenalty(
+          n.sym,
+          m.implicitlyAdded,
+          isInherited = false
+        )
+        p | IsNotLocalByBlock
+      }
+
       case sm: ScopeMember if sm.accessible =>
         computeRelevancePenalty(
           sm.sym,
@@ -193,6 +205,7 @@ trait Completions { this: MetalsGlobal =>
     if (sym.isSynthetic) relevance |= IsSynthetic
     if (sym.isDeprecated) relevance |= IsDeprecated
     if (isEvilMethod(sym.name)) relevance |= IsEvilMethod
+    println(showFlags(relevance), sym.fullName, sym.getClass.toString)
     relevance
   }
 
@@ -236,21 +249,22 @@ trait Completions { this: MetalsGlobal =>
         )
       }
       override def compare(o1: Member, o2: Member): Int = {
-        val byCompletion = completion.compare(o1, o2)
-        if (byCompletion != 0) byCompletion
+
+        val byLocalSymbol = compareLocalSymbols(o1, o2)
+        if (byLocalSymbol != 0) byLocalSymbol.tap(i => println("bylocalSymbol", o1, o2, i))
         else {
-          val byLocalSymbol = compareLocalSymbols(o1, o2)
-          if (byLocalSymbol != 0) byLocalSymbol
+          val byRelevance = Integer.compare(
+            relevancePenalty(o1),
+            relevancePenalty(o2)
+          )
+          if (byRelevance != 0) byRelevance.tap(i => println("byRelevance", o1, o2, i))
           else {
-            val byRelevance = Integer.compare(
-              relevancePenalty(o1),
-              relevancePenalty(o2)
-            )
-            if (byRelevance != 0) byRelevance
+            val byCompletion = completion.compare(o1, o2)
+            if (byCompletion != 0) byCompletion.tap(i => println("byCompletion", o1.sym.fullName, o2.sym.fullName, i))
             else {
               val byFuzzy =
                 java.lang.Integer.compare(fuzzyScore(o1), fuzzyScore(o2))
-              if (byFuzzy != 0) byFuzzy
+              if (byFuzzy != 0) byFuzzy.tap(i => println("byFuzzy", o1.sym.fullName, o2.sym.fullName, i))
               else {
                 val byIdentifier =
                   IdentifierComparator.compare(
