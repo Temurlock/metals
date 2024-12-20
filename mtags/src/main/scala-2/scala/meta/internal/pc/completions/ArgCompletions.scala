@@ -1,11 +1,12 @@
 package scala.meta.internal.pc.completions
 
 import scala.collection.immutable.Nil
-
 import scala.meta.internal.pc.Identifier
 import scala.meta.internal.pc.MetalsGlobal
-
 import org.eclipse.{lsp4j => l}
+
+import scala.meta.internal.metals.Fuzzy
+import scala.util.chaining.scalaUtilChainingOps
 
 trait ArgCompletions { this: MetalsGlobal =>
 
@@ -116,14 +117,7 @@ trait ArgCompletions { this: MetalsGlobal =>
         val byArgPosition =
           -java.lang.Integer.compare(argPosition(o1), argPosition(o2))
         if (byArgPosition != 0) {
-          println(
-            ">>>>>>>>>",
-            o1.getClass.getName,
-            argPosition(o1),
-            o2.getClass.getName,
-            argPosition(o2),
-            params
-          ); byArgPosition
+           byArgPosition
         } else {
           prioritize(o1).compare(prioritize(o2))
         }
@@ -146,6 +140,7 @@ trait ArgCompletions { this: MetalsGlobal =>
         2) Это NamedArgMember: member.isInstanceOf[NamedArgMember]
         3) Это ArgCompletionTextEditMember: isParamName.indexOf(member.sym.name.toString().trim()) != -1
      */
+    // Добавить фузяху
     override def isPrioritized(member: Member): Boolean = member match {
       case _: NamedArgMember => true
       case m: ArgCompletionTextEditMember =>
@@ -158,7 +153,7 @@ trait ArgCompletions { this: MetalsGlobal =>
 
     private def matchingTypesInScope(
         paramType: Type
-    ): List[String] = {
+    ): List[Symbol] = {
 
       completions match {
         case members: CompletionResult.ScopeMembers
@@ -166,7 +161,7 @@ trait ArgCompletions { this: MetalsGlobal =>
           members.results
             .collect {
               case mem if memberMatchType(paramType, mem) =>
-                mem.sym.name.toString().trim()
+                mem.sym
             }
         case _ =>
           Nil
@@ -208,6 +203,7 @@ trait ArgCompletions { this: MetalsGlobal =>
 
     private def findDefaultValue(param: Symbol): String = {
       val matchingType = matchingTypesInScope(param.tpe)
+        .map(_.name.toString().trim())
       if (matchingType.size == 1) {
         s":${matchingType.head}"
       } else if (matchingType.size > 1) {
@@ -250,7 +246,8 @@ trait ArgCompletions { this: MetalsGlobal =>
     private def findPossibleDefaults(): List[TextEditMember] = {
       params.flatMap { param =>
         val allMembers = matchingTypesInScope(param.tpe)
-        allMembers.map { memberName =>
+        allMembers.map { member =>
+          val memberName = member.name.toString().trim()
           val editText =
             Identifier.backtickWrap(param.name) + " = " + memberName
           val edit = new l.TextEdit(editRange, editText)
@@ -259,6 +256,7 @@ trait ArgCompletions { this: MetalsGlobal =>
             filterText = param.name.toString(),
             edit = edit,
             param = param,
+            argValue = member,
             memberName = memberName,
             label = Some(editText)
           )
@@ -281,7 +279,7 @@ trait ArgCompletions { this: MetalsGlobal =>
       if (methodSym == null) Nil
       else
         params.distinct.map(param =>
-          new NamedArgMember(param)
+          new NamedArgMember(param).tap(_ => println(param, param.flagString))
         ) ::: findPossibleDefaults() ::: fillAllFields()
     }
 
