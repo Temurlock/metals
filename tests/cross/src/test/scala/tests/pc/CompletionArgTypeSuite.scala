@@ -2,8 +2,6 @@ package tests.pc
 
 import tests.BaseCompletionSuite
 
-import scala.language.ScalaSource
-
 class CompletionArgTypeSuite extends BaseCompletionSuite {
 
   // Нужно понять как сортировать.
@@ -22,12 +20,14 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
         |  foo(@@)
         |}
         |""".stripMargin,
-    """|b: String
-       |banana = b : String
-       |banana = : String
-       |a: Int
+    """b: String
+      |banana = b : String
+      |a: Int
+      |a = a : Int
+      |banana = foo : String
+      |banana = : String
        |""".stripMargin,
-    topLines = Option(8)
+    topLines = Option(6)
   )
 
   /*
@@ -50,12 +50,12 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
         |  foo(b@@)
         |}
         |""".stripMargin,
-    """|b: String
-       |banana = a : String
-       |banana = b : String
-       |banana = : String
+    """b: String
+      |banana = b : String
+      |banana = a : String
+      |Autofill with default values(banana: String, a: Int): Nothing
        |""".stripMargin,
-    topLines = Option(8)
+    topLines = Option(4)
   )
 
   check(
@@ -70,10 +70,12 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
         |""".stripMargin,
     """|b: Int
        |a = b : Int
-       |a = : Int
        |a: String
+       |foo(banana: String, a: Int): Nothing
+       |a = foo : Int
+       |a = : Int
        |""".stripMargin,
-    topLines = Option(8)
+    topLines = Option(6)
   )
 
   check(
@@ -87,11 +89,12 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
         |}
         |""".stripMargin,
     """|bb: Int
-       |bb = aa : Int
        |bb = bb : Int
+       |bb = aa : Int
+       |bb = foo : Int
        |bb = : Int
        |""".stripMargin,
-    topLines = Option(8)
+    topLines = Option(5)
   )
 
   check(
@@ -107,16 +110,14 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
         |foo(ba@@)
         |}
         |""".stripMargin,
-    """bawww: Int
-      |baInt(v: String): Int
-      |ba = Integer2int : Int
-      |ba = baInt : Int
-      |ba = bawww : Int
-      |ba = hashCode : Int
-      |ba = : Int
-      |baaaa: String
+    """|bawww: Int
+       |ba = bawww : Int
+       |baaaa: String
+       |baInt(v: String): Int
+       |ba = baInt : Int
+       |ba = : Int
       |""".stripMargin,
-    topLines = Option(8)
+    topLines = Option(6)
   )
 
 
@@ -136,14 +137,12 @@ class CompletionArgTypeSuite extends BaseCompletionSuite {
     """
       |baInt: String => Int
       |bawww: Int
-      |ba = Integer2int : Int
       |ba = baInt : Int
       |ba = bawww : Int
-      |ba = hashCode : Int
-      |ba = : Int
       |baaaa: String
+      |ba = : Int
       |""".stripMargin,
-    topLines = Option(8)
+    topLines = Option(6)
   )
 
 }
