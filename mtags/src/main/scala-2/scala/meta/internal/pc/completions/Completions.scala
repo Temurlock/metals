@@ -21,6 +21,8 @@ import scala.meta.internal.semanticdb.Scala._
 
 import org.eclipse.{lsp4j => l}
 
+import scala.meta.internal.pc.MemberOrdering.IsNotLocalByBlock
+
 /**
  * Utility methods for completions.
  */
@@ -78,6 +80,27 @@ trait Completions { this: MetalsGlobal =>
       val commitCharacter: Option[String] = None
   ) extends ScopeMember(sym, NoType, true, EmptyTree)
 
+  class ArgCompletionTextEditMember(
+      override val filterText: String,
+      override val edit: l.TextEdit,
+      val param: Symbol,
+      val argValue: Symbol,
+      val memberName: String,
+      override val label: Option[String] = None,
+      override val command: Option[String] = None,
+      override val additionalTextEdits: List[l.TextEdit] = Nil,
+      override val commitCharacter: Option[String] = None
+  ) extends TextEditMember(
+        filterText,
+        edit,
+        argValue,
+        label,
+        Some(" : " + argValue.tpe),
+        command,
+        additionalTextEdits,
+        commitCharacter
+      )
+
   val packageSymbols: mutable.Map[String, Option[Symbol]] =
     mutable.Map.empty[String, Option[Symbol]]
   def packageSymbolFromString(symbol: String): Option[Symbol] =
@@ -122,6 +145,17 @@ trait Completions { this: MetalsGlobal =>
         ) >>> 15
         if (!w.sym.isAbstract) penalty |= MemberOrdering.IsNotAbstract
         penalty
+
+      case n: NamedArgMember if n.accessible => {
+        println("named")
+        val p = computeRelevancePenalty(
+          n.sym,
+          m.implicitlyAdded,
+          isInherited = false
+        )
+        p | IsNotLocalByBlock
+      }
+
       case sm: ScopeMember if sm.accessible =>
         computeRelevancePenalty(
           sm.sym,
@@ -234,17 +268,18 @@ trait Completions { this: MetalsGlobal =>
       }
 
       override def compare(o1: Member, o2: Member): Int = {
-        val byCompletion = completion.compare(o1, o2)
-        if (byCompletion != 0) byCompletion
+
+        val byLocalSymbol = compareLocalSymbols(o1, o2)
+        if (byLocalSymbol != 0) byLocalSymbol
         else {
-          val byLocalSymbol = compareLocalSymbols(o1, o2)
-          if (byLocalSymbol != 0) byLocalSymbol
+          val byRelevance = Integer.compare(
+            relevancePenalty(o1),
+            relevancePenalty(o2)
+          )
+          if (byRelevance != 0) byRelevance
           else {
-            val byRelevance = Integer.compare(
-              relevancePenalty(o1),
-              relevancePenalty(o2)
-            )
-            if (byRelevance != 0) byRelevance
+            val byCompletion = completion.compare(o1, o2)
+            if (byCompletion != 0) byCompletion
             else {
               val byFuzzy =
                 java.lang.Integer.compare(fuzzyScore(o1), fuzzyScore(o2))
